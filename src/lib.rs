@@ -47,11 +47,11 @@ pub struct RingBufferMap {
 ///  On success, the user receives a raw pointer to
 impl RingBufferMap {
     fn as_ref(&self) -> &RingBuffer {
-        let p = self.map.as_ptr() as * RingBuffer;
+        let p = self.map.as_ptr() as *const RingBuffer;
         unsafe {&*p}
     }
     fn as_mut_ref(&self) ->&mut RingBuffer {
-        let p = self.map.as_mut_ptr() as *mut RingBuffer;
+        let  p = self.map.as_mut_ptr() as *mut RingBuffer;
         unsafe {&mut *p}
     }
     fn check_magic(map: &memmap::Mmap) -> bool {
@@ -91,13 +91,15 @@ impl RingBufferMap {
     }
     // getters
 
+
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     #[test]
-    fn it_works() {
-        let result = 2 + 2;
-        assert_eq!(result, 4);
+    fn map_fail() {
+        let result = RingBufferMap::new("Cargo.toml");
+        assert!(result.is_err());
     }
 }
