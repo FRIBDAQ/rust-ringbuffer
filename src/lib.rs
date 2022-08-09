@@ -48,18 +48,21 @@ pub struct RingBufferMap {
 impl RingBufferMap {
     fn as_ref(&self) -> &RingBuffer {
         let p = self.map.as_ptr() as *const RingBuffer;
-        unsafe {&*p}
+        unsafe { &*p }
     }
-    fn as_mut_ref(&self) ->&mut RingBuffer {
-        let  p = self.map.as_mut_ptr() as *mut RingBuffer;
-        unsafe {&mut *p}
-    }
+
     fn check_magic(map: &memmap::Mmap) -> bool {
         // Make a raw pointer to a ringbuffer and turn it into a ref:
 
         let p = map.as_ptr() as *const RingBuffer;
         let r = unsafe { &*p };
-        str::from_utf8(&r.header.magic_string).unwrap() == MAGIC_STRING
+        let magic_value = String::from(str::from_utf8(&r.header.magic_string).unwrap());
+        let magic_value = magic_value.trim();
+        let magic_value = magic_value.trim_matches('\0');
+        let magic_expected = String::from(MAGIC_STRING);
+        let magic_expected = magic_expected.trim();
+
+        magic_value == magic_expected
     }
     // Take a file which ought to be a ring buffer and map it:
 
@@ -90,8 +93,6 @@ impl RingBufferMap {
         }
     }
     // getters
-
-
 }
 
 #[cfg(test)]
@@ -101,5 +102,11 @@ mod tests {
     fn map_fail() {
         let result = RingBufferMap::new("Cargo.toml");
         assert!(result.is_err());
+    }
+    #[test]
+    fn map_ok() {
+        // Requires our 'poop' file - valid ring buffer.
+        let result = RingBufferMap::new("poop");
+        assert!(result.is_ok());
     }
 }
