@@ -1,5 +1,4 @@
 use memmap::MmapMut;
-use std::fs::File;
 use std::fs::OpenOptions;
 use std::mem;
 use std::str;
