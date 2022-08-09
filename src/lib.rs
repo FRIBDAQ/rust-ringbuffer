@@ -1,5 +1,6 @@
-use memmap::Mmap;
+use memmap::MmapMut;
 use std::fs::File;
+use std::fs::OpenOptions;
 use std::mem;
 use std::str;
 use std::string::ToString;
@@ -38,7 +39,7 @@ pub struct RingBuffer {
     first_consumer: ClientInformation,
 }
 pub struct RingBufferMap {
-    map: memmap::Mmap,
+    map: memmap::MmapMut,
 }
 ///
 /// Presently the only way to construct a ring buffer
@@ -49,8 +50,12 @@ impl RingBufferMap {
         let p = self.map.as_ptr() as *const RingBuffer;
         unsafe { &*p }
     }
+    fn as_mut_ref(&mut self) -> &mut RingBuffer {
+        let p = self.map.as_mut_ptr() as *mut RingBuffer;
+        unsafe { &mut *p }
+    }
 
-    fn check_magic(map: &memmap::Mmap) -> bool {
+    fn check_magic(map: &memmap::MmapMut) -> bool {
         // Make a raw pointer to a ringbuffer and turn it into a ref:
 
         let p = map.as_ptr() as *const RingBuffer;
@@ -66,9 +71,14 @@ impl RingBufferMap {
     // Take a file which ought to be a ring buffer and map it:
 
     pub fn new(ring_file: &str) -> Result<RingBufferMap, String> {
-        match File::open(ring_file) {
+        match OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create(false)
+            .open(ring_file)
+        {
             Ok(fp) => {
-                match unsafe { Mmap::map(&fp) } {
+                match unsafe { MmapMut::map_mut(&fp) } {
                     Ok(map) => {
                         // Ensure this could be a ring buffer:
 
@@ -103,14 +113,14 @@ impl RingBufferMap {
         // Needed for testing.
         self.as_ref().header.data_offset
     }
-    pub fn producer(&self) -> ClientInformation {
-        self.as_ref().producer
+    pub fn producer(&mut self) -> &mut ClientInformation {
+        &mut self.as_mut_ref().producer
     }
-    pub fn consumer(&self, n: usize) -> Result<ClientInformation, String> {
-        let me = self.as_ref();
+    pub fn consumer(&mut self, n: usize) -> Result<&mut ClientInformation, String> {
+        let me = self.as_mut_ref();
         if n < me.header.max_consumer {
-            let pconsumer = &(me.first_consumer) as *const ClientInformation;
-            Ok(unsafe { *(pconsumer.offset(n as isize)) })
+            let pconsumer = &mut (me.first_consumer) as *mut ClientInformation;
+            Ok(unsafe { &mut *pconsumer.offset(n as isize) })
         } else {
             Err(format!(
                 "Consumer {} does  not exist, max: {}",
@@ -118,6 +128,20 @@ impl RingBufferMap {
                 me.header.max_consumer - 1
             ))
         }
+    }
+    // Controlled mutators:
+
+    pub fn set_producer(&mut self, pid: u32) -> Result<u32, String> {
+        Err(String::from("unimplemented"))
+    }
+    pub fn set_consumer(&mut self, pid: u32, n: isize) -> Result<u32, String> {
+        Err(String::from("Unimplemented"))
+    }
+    pub fn free_producer(&mut self, pid: u32) -> Result<u32, String> {
+        Err(String::from("Unimplemented"))
+    }
+    pub fn free_consumer(&mut self, n: isize, pid: u32) -> Result<u32, String> {
+        Err(String::from("Unimplemented"))
     }
 }
 
@@ -142,36 +166,38 @@ mod tests {
     }
     #[test]
     fn get_producer() {
-        let ring = RingBufferMap::new("poop").unwrap();
+        let mut ring = RingBufferMap::new("poop").unwrap();
+        let p = ring.producer();
         assert_eq!(
             ClientInformation {
                 offset: 1355626,
                 pid: 0xffffffff,
             },
-            ring.producer(),
+            *p
         );
     }
     #[test]
     fn get_consumer_fail() {
-        let ring = RingBufferMap::new("poop").unwrap();
+        let mut ring = RingBufferMap::new("poop").unwrap();
 
         assert!(ring.consumer(100).is_err());
     }
     #[test]
     fn get_consumer_ok1() {
-        let ring = RingBufferMap::new("poop").unwrap();
+        let mut ring = RingBufferMap::new("poop").unwrap();
         assert!(ring.consumer(0).is_ok());
     }
     #[test]
     fn get_consumer_ok2() {
-        let ring = RingBufferMap::new("poop").unwrap();
+        let mut ring = RingBufferMap::new("poop").unwrap();
+        let offset = ring.data_offset();
         let consumer = ring.consumer(10).unwrap();
         assert_eq!(
             ClientInformation {
-                offset: ring.data_offset(),
+                offset: offset,
                 pid: 0xffffffff
             },
-            consumer
+            *consumer
         );
     }
 }
