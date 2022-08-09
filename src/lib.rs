@@ -1,7 +1,5 @@
 use memmap::Mmap;
 use std::fs::File;
-use std::io;
-use std::io::Error;
 use std::mem;
 use std::str;
 use std::string::ToString;
@@ -25,6 +23,7 @@ pub struct RingHeader {
 /// Each client (producr or consumer)
 /// is represented by a client information structure:
 #[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ClientInformation {
     offset: usize, // Put/Get offset.
     pid: u32,      // Process ID owning or 0xffffffff if free.
@@ -93,6 +92,33 @@ impl RingBufferMap {
         }
     }
     // getters
+
+    pub fn max_consumers(&self) -> usize {
+        self.as_ref().header.max_consumer
+    }
+    pub fn data_bytes(&self) -> usize {
+        self.as_ref().header.data_bytes
+    }
+    pub fn data_offset(&self) -> usize {
+        // Needed for testing.
+        self.as_ref().header.data_offset
+    }
+    pub fn producer(&self) -> ClientInformation {
+        self.as_ref().producer
+    }
+    pub fn consumer(&self, n: usize) -> Result<ClientInformation, String> {
+        let me = self.as_ref();
+        if n < me.header.max_consumer {
+            let pconsumer = &(me.first_consumer) as *const ClientInformation;
+            Ok(unsafe { *(pconsumer.offset(n as isize)) })
+        } else {
+            Err(format!(
+                "Consumer {} does  not exist, max: {}",
+                n,
+                me.header.max_consumer - 1
+            ))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -108,5 +134,44 @@ mod tests {
         // Requires our 'poop' file - valid ring buffer.
         let result = RingBufferMap::new("poop");
         assert!(result.is_ok());
+    }
+    #[test]
+    fn max_consumers() {
+        let ring = RingBufferMap::new("poop").unwrap();
+        assert_eq!(100, ring.max_consumers());
+    }
+    #[test]
+    fn get_producer() {
+        let ring = RingBufferMap::new("poop").unwrap();
+        assert_eq!(
+            ClientInformation {
+                offset: 1355626,
+                pid: 0xffffffff,
+            },
+            ring.producer(),
+        );
+    }
+    #[test]
+    fn get_consumer_fail() {
+        let ring = RingBufferMap::new("poop").unwrap();
+
+        assert!(ring.consumer(100).is_err());
+    }
+    #[test]
+    fn get_consumer_ok1() {
+        let ring = RingBufferMap::new("poop").unwrap();
+        assert!(ring.consumer(0).is_ok());
+    }
+    #[test]
+    fn get_consumer_ok2() {
+        let ring = RingBufferMap::new("poop").unwrap();
+        let consumer = ring.consumer(10).unwrap();
+        assert_eq!(
+            ClientInformation {
+                offset: ring.data_offset(),
+                pid: 0xffffffff
+            },
+            consumer
+        );
     }
 }
