@@ -727,4 +727,33 @@ mod tests {
         }
         ring.free_producer(producer).unwrap();
     }
+    #[test]
+    fn status_6() {
+        // two consumers one 100, the other 200 back.. the point
+        // is to see the overall free and avail are correctly computed.
+
+        let mut ring = RingBufferMap::new("poop").unwrap();
+        let producer = 12345;
+        let consumer = 54321;
+        let data_size = 100;
+        ring.set_producer(producer).unwrap();
+        for i in 0..ring.max_consumers() {
+            ring.consumer(i).unwrap().pid = UNUSED_ENTRY;
+        }
+        ring.set_consumer(2, consumer).unwrap();
+        ring.set_consumer(3, consumer + 1).unwrap();
+        ring.consumer(3).unwrap().offset = ring.consumer(2).unwrap().offset + data_size;
+
+        ring.set_producer(producer).unwrap();
+        ring.producer().offset = ring.consumer(3).unwrap().offset + data_size;
+
+        let status = ring.get_usage();
+        assert_eq!(data_size * 2, status.max_queued);
+        assert_eq!(ring.data_bytes() - data_size * 2, status.free_space);
+
+        for i in 0..ring.max_consumers() {
+            ring.consumer(i).unwrap().pid = UNUSED_ENTRY;
+        }
+        ring.free_producer(producer).unwrap();
+    }
 }
