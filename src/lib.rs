@@ -48,15 +48,24 @@ pub struct RingBufferMap {
 /// is by mapping a ring buffer file.
 ///  On success, the user receives a raw pointer to
 impl RingBufferMap {
+    ///
+    /// convert the object's map to a reference to a ringbuffer
+    ///  
     fn as_ref(&self) -> &RingBuffer {
         let p = self.map.as_ptr() as *const RingBuffer;
         unsafe { &*p }
     }
+    ///
+    /// Convert the object's map to a mutable reference to a ringbuffer.
+    ///
     fn as_mut_ref(&mut self) -> &mut RingBuffer {
         let p = self.map.as_mut_ptr() as *mut RingBuffer;
         unsafe { &mut *p }
     }
-
+    ///
+    /// Check that a mapped file has the correct 'magic' string
+    /// at the beginning of it.  Note that we must trim the nulls from the
+    /// back end  of the magic string in the file.
     fn check_magic(map: &memmap::MmapMut) -> bool {
         // Make a raw pointer to a ringbuffer and turn it into a ref:
 
@@ -72,6 +81,14 @@ impl RingBufferMap {
     }
     // Take a file which ought to be a ring buffer and map it:
 
+    ///
+    ///  Map to an existing ring buffer (the rust interface does not
+    /// have a create method to create a new ring buffer file...yet).
+    /// The parameter is the path to an existing file.
+    /// The RingBufferMap object returned on the successful return
+    /// can then be used to call object methods defined below to get things
+    /// done.
+    ///
     pub fn new(ring_file: &str) -> Result<RingBufferMap, String> {
         match OpenOptions::new()
             .write(true)
@@ -105,15 +122,37 @@ impl RingBufferMap {
     }
     // getters
 
+    ///
+    /// returns the maximum number of consumers that can connect
+    /// to this object.
+    ///
     pub fn max_consumers(&self) -> usize {
         self.as_ref().header.max_consumer
     }
+    ///
+    /// Returns the size of the data section of the ring buffer file.
+    /// Units are units of u8.
+    ///
     pub fn data_bytes(&self) -> usize {
         self.as_ref().header.data_bytes
     }
+    ///
+    /// Return the offset in bytes to the data section of the ring buffer
+    /// file.   This represents a single producer, multi-consumer circular
+    /// buffer of bytes that is data_bytes() lage
+    ///
     pub fn data_offset(&self) -> usize {
         // Needed for testing.
         self.as_ref().header.data_offset
+    }
+    ///
+    /// Retun the offset in bytes to the top of the ring buffer.
+    /// Note that normally data_offset and data_bytes are sufficient
+    /// to perform appropriate computations (in fact, data_offset +  data+bytes
+    /// should be top_offset+1)
+    ///
+    pub fn top_offset(&self) -> usize {
+        self.as_ref().header.top_offset
     }
     pub fn producer(&mut self) -> &mut ClientInformation {
         &mut self.as_mut_ref().producer
@@ -378,5 +417,13 @@ mod tests {
         ring.consumer(1).unwrap().pid = UNUSED_ENTRY;
 
         assert!(ring.free_consumer(1, 12345).is_ok());
+    }
+    #[test]
+    fn offset_sanity() {
+        let ring = RingBufferMap::new("poop").unwrap();
+        assert_eq!(
+            ring.data_offset() + ring.data_bytes(),
+            ring.top_offset() + 1
+        );
     }
 }
