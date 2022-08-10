@@ -1,6 +1,7 @@
 // *** IMPORTANT - see note prior to tests about how tests must be run.
 
 use memmap::MmapMut;
+use std::cmp;
 use std::fs::OpenOptions;
 use std::mem;
 use std::str;
@@ -49,6 +50,40 @@ pub struct RingBufferMap {
     map: memmap::MmapMut,
 }
 ///
+/// for a given consumer (used) this provides
+/// information about the data that's available to it
+/// and the free space the producer has to put data before
+/// running into that consumers get offset.
+///
+pub struct ConsumerUsage {
+    pub pid: u32,
+    pub free: usize,
+    pub available: usize,
+}
+
+///
+/// provides information about the ring status.
+///
+/// -   producer_pid is the pid of the producer.  This is 0xffffffff
+///     if there is no producer.
+/// -   free_space is the amount of free space available before the
+///     producer bumps into the most behind consumer
+/// -   max_queued is the maximum number of bytes available to any
+///     consumer.
+/// -   consumer_usage is a vector of ConsumerUsage objects, one for
+///     allocated consumer object.
+///
+/// Note the computation for free and available are done independent of
+/// the existence of a producer.  This is because even after a producer exits,
+/// the consumers want to get any data from it that they've not yet gotten
+///
+pub struct RingStatus {
+    pub producer_pid: u32,
+    pub free_space: usize,
+    pub max_queued: usize,
+    pub consumer_usage: Vec<ConsumerUsage>,
+}
+
 /// Presently the only way to construct a ring buffer
 /// is by mapping a ring buffer file.
 ///  On success, the user receives a raw pointer to
@@ -297,6 +332,49 @@ impl RingBufferMap {
             Err(reason) => Err(reason),
         }
     }
+    // Mor interesting methods:
+
+    /// Return the RingUsage struct that reflects the current
+    /// state of the ringbuffer.
+    ///
+    pub fn get_usage(&mut self) -> RingStatus {
+        // Init the result
+
+        let mut used: usize = 0;
+        let mut free = self.data_bytes();
+        let mut consumer_info = vec![];
+
+        // Fill it in based on the producer/consumer info:
+
+        let producer_offset = self.producer().offset;
+        println!("Producer: {}", producer_offset);
+        let size = self.data_bytes();
+        for cons in 0..self.max_consumers() {
+            println!("# {}", cons);
+            let consumer = self.consumer(cons).unwrap();
+            let consumer_pid = consumer.pid; // these prevent mutable
+            let consumer_offset = consumer.offset; // immutable borrow conflicts
+            println!("Cons: {}", consumer_offset);
+            if consumer.pid != UNUSED_ENTRY {
+                let avail = self.distance(consumer_offset, producer_offset);
+
+                let usage = ConsumerUsage {
+                    pid: consumer_pid,
+                    free: size - avail,
+                    available: avail,
+                };
+                free = cmp::min(free, usage.free);
+                used = cmp::max(used, usage.available);
+                consumer_info.push(usage);
+            }
+        }
+        RingStatus {
+            producer_pid: self.producer().pid,
+            free_space: free,
+            max_queued: used,
+            consumer_usage: consumer_info,
+        }
+    }
 }
 
 // Note the tests below must be run:
@@ -529,5 +607,126 @@ mod tests {
 
             expected = expected + 1;
         }
+    }
+    #[test]
+    fn status_1() {
+        let mut ring = RingBufferMap::new("poop").unwrap();
+        // Ensure there are no used descriptors:
+
+        ring.producer().pid = UNUSED_ENTRY;
+        for i in 0..ring.max_consumers() {
+            ring.consumer(i).unwrap().pid = UNUSED_ENTRY;
+        }
+
+        let usage = ring.get_usage();
+        assert_eq!(UNUSED_ENTRY, usage.producer_pid);
+        assert_eq!(ring.data_bytes(), usage.free_space);
+        assert_eq!(0, usage.max_queued);
+        assert_eq!(0, usage.consumer_usage.len());
+    }
+    #[test]
+    fn status_2() {
+        let mut ring = RingBufferMap::new("poop").unwrap();
+        let producer = 12345;
+        ring.producer().pid = producer;
+        for i in 0..ring.max_consumers() {
+            ring.consumer(i).unwrap().pid = UNUSED_ENTRY;
+        }
+
+        let usage = ring.get_usage();
+        assert_eq!(producer, usage.producer_pid);
+        assert_eq!(ring.data_bytes(), usage.free_space);
+        assert_eq!(0, usage.max_queued);
+        assert_eq!(0, usage.consumer_usage.len());
+    }
+    #[test]
+    fn status_3() {
+        let mut ring = RingBufferMap::new("poop").unwrap();
+        let producer = 12345;
+        let consumer = 54321;
+        ring.producer().pid = producer;
+
+        // one caught up consumer:
+
+        for i in 0..ring.max_consumers() {
+            ring.consumer(i).unwrap().pid = UNUSED_ENTRY;
+        }
+        ring.set_consumer(3, consumer).unwrap();
+
+        let status = ring.get_usage();
+        assert_eq!(producer, status.producer_pid);
+        assert_eq!(ring.data_bytes(), status.free_space);
+        assert_eq!(0, status.max_queued);
+        assert_eq!(1, status.consumer_usage.len());
+        assert_eq!(consumer, status.consumer_usage[0].pid);
+        assert_eq!(ring.data_bytes(), status.consumer_usage[0].free);
+        assert_eq!(0, status.consumer_usage[0].available);
+
+        ring.free_consumer(3, consumer).unwrap();
+    }
+    #[test]
+    fn status_4() {
+        // 1 consumer that's 100 bytes behind the producer.
+
+        let mut ring = RingBufferMap::new("poop").unwrap();
+        let producer = 12345;
+        let consumer = 54321;
+        let data_size = 100;
+        ring.set_producer(producer).unwrap();
+        for i in 0..ring.max_consumers() {
+            ring.consumer(i).unwrap().pid = UNUSED_ENTRY;
+        }
+        ring.set_consumer(3, consumer).unwrap();
+
+        // add data_size bytes to the ring the consuerm does not have:
+        // Not done this way, the optimizer seems happy enough to order
+        // set_consumer following the offset setting done here.
+
+        ring.producer().offset = ring.consumer(3).unwrap().offset + data_size;
+        let status = ring.get_usage();
+
+        assert_eq!(producer, status.producer_pid);
+        assert_eq!(ring.data_bytes() - data_size, status.free_space);
+        assert_eq!(data_size, status.max_queued);
+        assert_eq!(1, status.consumer_usage.len());
+        assert_eq!(consumer, status.consumer_usage[0].pid);
+        assert_eq!(ring.data_bytes() - data_size, status.consumer_usage[0].free);
+        assert_eq!(data_size, status.consumer_usage[0].available);
+
+        for i in 0..ring.max_consumers() {
+            ring.consumer(i).unwrap().pid = UNUSED_ENTRY;
+        }
+        ring.free_producer(producer).unwrap();
+    }
+    #[test]
+    fn status_5() {
+        // one consumer behind by 100 but over a wrap:__rust_force_expr!
+
+        let mut ring = RingBufferMap::new("poop").unwrap();
+        let producer = 12345;
+        let consumer = 54321;
+        let data_size = 100;
+        ring.set_producer(producer).unwrap();
+        for i in 0..ring.max_consumers() {
+            ring.consumer(i).unwrap().pid = UNUSED_ENTRY;
+        }
+        ring.set_consumer(4, consumer).unwrap();
+        ring.producer().offset = data_size - 1;
+        ring.consumer(4).unwrap().offset = ring.top_offset();
+
+        let status = ring.get_usage();
+
+        assert_eq!(producer, status.producer_pid);
+        assert_eq!(ring.data_bytes() - data_size, status.free_space);
+        assert_eq!(data_size, status.max_queued);
+        assert_eq!(1, status.consumer_usage.len());
+        assert_eq!(consumer, status.consumer_usage[0].pid);
+        assert_eq!(ring.data_bytes() - data_size, status.consumer_usage[0].free);
+        assert_eq!(data_size, status.consumer_usage[0].available);
+
+        for i in 0..ring.max_consumers() {
+            ring.consumer(i).unwrap().pid = UNUSED_ENTRY;
+        }
+        ring.free_producer(producer).unwrap();
     }
 }
