@@ -84,6 +84,22 @@ impl RingBufferMap {
 
         magic_value == magic_expected
     }
+    ///
+    /// Determine the modulo distance between two offsets.
+    /// The first offset is considered to be before the second offset.
+    /// This can be used to determine the number of bytes of data available
+    /// to a consumer or the number of free bytes in the ring buffer.
+    ///
+    fn distance(&self, off1: usize, off2: usize) -> usize {
+        // Two cases, off1 < off2, it's a straight difference.
+        // if off 1 > off2, it's a modulo distance.
+
+        if off1 <= off2 {
+            off2 - off1
+        } else {
+            (off2 - self.data_offset()) + (self.top_offset() - off1) + 1
+        }
+    }
     // Take a file which ought to be a ring buffer and map it:
 
     ///
@@ -264,7 +280,7 @@ impl RingBufferMap {
     ///
     /// free consumer slot n the slot must either already be free or
     /// owned by pid.  On success, the pid is returned.
-    /// 
+    ///
     pub fn free_consumer(&mut self, n: usize, pid: u32) -> Result<u32, String> {
         match self.consumer(n) {
             Ok(cons) => {
@@ -469,5 +485,49 @@ mod tests {
             ring.data_offset() + ring.data_bytes(),
             ring.top_offset() + 1
         );
+    }
+    #[test]
+    fn distance_1() {
+        // Offsets are - 0 distance from themselves:
+        let ring = RingBufferMap::new("poop").unwrap();
+        assert_eq!(0, ring.distance(ring.data_offset(), ring.data_offset()));
+        assert_eq!(0, ring.distance(ring.top_offset(), ring.top_offset()));
+    }
+    #[test]
+    fn distance_2() {
+        // bottom is data_bytes -1 distance from top.
+
+        let ring = RingBufferMap::new("poop").unwrap();
+        assert_eq!(
+            ring.data_bytes() - 1,
+            ring.distance(ring.data_offset(), ring.top_offset())
+        );
+        assert_eq!(1, ring.distance(ring.top_offset(), ring.data_offset()),);
+    }
+    #[test]
+    fn distance_3() {
+        // just some distances between off1 < off2 cases
+        let ring = RingBufferMap::new("poop").unwrap();
+        let mut expected = ring.data_bytes() - 1;
+        for i in ring.data_offset()..ring.data_offset() + 1000 {
+            assert_eq!(expected, ring.distance(i, ring.top_offset()));
+            expected = expected - 1;
+        }
+    }
+    #[test]
+    fn distance_4() {
+        // some distances between off1 > off2:
+
+        let ring = RingBufferMap::new("poop").unwrap();
+        let mut expected = 1;
+
+        for i in 0..1000 {
+            assert_eq!(
+                expected,
+                ring.distance(ring.top_offset() - i, ring.data_offset())
+            );
+
+            expected = expected + 1;
+        }
     }
 }
