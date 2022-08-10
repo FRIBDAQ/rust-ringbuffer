@@ -56,9 +56,6 @@ impl RingBufferMap {
         let p = self.map.as_mut_ptr() as *mut RingBuffer;
         unsafe { &mut *p }
     }
-    fn valid_consumer(&self, n: usize) -> bool {
-        n < self.max_consumers()
-    }
 
     fn check_magic(map: &memmap::MmapMut) -> bool {
         // Make a raw pointer to a ringbuffer and turn it into a ref:
@@ -185,8 +182,21 @@ impl RingBufferMap {
         }
     }
 
-    pub fn free_consumer(&mut self, n: isize, pid: u32) -> Result<u32, String> {
-        Err(String::from("Unimplemented"))
+    pub fn free_consumer(&mut self, n: usize, pid: u32) -> Result<u32, String> {
+        match self.consumer(n) {
+            Ok(cons) => {
+                if (cons.pid == UNUSED_ENTRY) || (cons.pid == pid) {
+                    cons.pid = UNUSED_ENTRY;
+                    Ok(pid)
+                } else {
+                    Err(format!(
+                        "Consumer slot {} is not owned by {}, {} owns it",
+                        n, pid, cons.pid
+                    ))
+                }
+            }
+            Err(reason) => Err(reason),
+        }
     }
 }
 
@@ -338,5 +348,35 @@ mod tests {
             *ring.consumer(1).unwrap()
         );
         ring.consumer(1).unwrap().pid = UNUSED_ENTRY;
+    }
+    #[test]
+    fn free_consumer_fail1() {
+        let mut ring = RingBufferMap::new("poop").unwrap();
+        // invalid slot number:
+
+        assert!(ring.free_consumer(ring.max_consumers(), 1234).is_err());
+    }
+    #[test]
+    fn free_consumer_fail2() {
+        let mut ring = RingBufferMap::new("poop").unwrap();
+        ring.consumer(1).unwrap().pid = 666;
+        assert!(ring.free_consumer(1, 12345).is_err());
+        ring.consumer(1).unwrap().pid = UNUSED_ENTRY;
+    }
+    #[test]
+    fn free_consumer_ok1() {
+        let mut ring = RingBufferMap::new("poop").unwrap();
+        ring.consumer(1).unwrap().pid = 12345;
+        let result = ring.free_consumer(1, 12345);
+        assert!(result.is_ok());
+        assert_eq!(12345, result.unwrap());
+    }
+    #[test]
+    fn free_consumer_ok2() {
+        // allowed to free a free slot
+        let mut ring = RingBufferMap::new("poop").unwrap();
+        ring.consumer(1).unwrap().pid = UNUSED_ENTRY;
+
+        assert!(ring.free_consumer(1, 12345).is_ok());
     }
 }
