@@ -24,7 +24,7 @@ pub struct RingHeader {
 }
 
 /// Each client (producr or consumer)
-/// is represented by a client information structure:
+/// is represented by a ClientInformation structure:
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ClientInformation {
@@ -40,6 +40,11 @@ pub struct RingBuffer {
     producer: ClientInformation,
     first_consumer: ClientInformation,
 }
+///
+/// Contains the mapping object that provides access to a ringbuffer.
+/// This provides a safe interface to the inherently unsafe ringbuffer.
+///  See the implementation for more.
+///
 pub struct RingBufferMap {
     map: memmap::MmapMut,
 }
@@ -146,7 +151,7 @@ impl RingBufferMap {
         self.as_ref().header.data_offset
     }
     ///
-    /// Retun the offset in bytes to the top of the ring buffer.
+    /// Return the offset in bytes to the top of the ring buffer.
     /// Note that normally data_offset and data_bytes are sufficient
     /// to perform appropriate computations (in fact, data_offset +  data+bytes
     /// should be top_offset+1)
@@ -154,9 +159,21 @@ impl RingBufferMap {
     pub fn top_offset(&self) -> usize {
         self.as_ref().header.top_offset
     }
+    ///
+    /// Returns a mutable refrence to the ClientInformation
+    /// struct that defines the producer.  Each ring buffer has
+    /// at most one producer.
+    ///
     pub fn producer(&mut self) -> &mut ClientInformation {
         &mut self.as_mut_ref().producer
     }
+    ///
+    /// Returns a mutable reference to the selected (by n) consumer's
+    /// ClientInformation struct
+    /// on success or an error message on failure.  There are a limited
+    /// number of consumer  ClientInformation structs.  Errors include
+    /// asking for one with n out of range.
+    ///
     pub fn consumer(&mut self, n: usize) -> Result<&mut ClientInformation, String> {
         let me = self.as_mut_ref();
         if n < me.header.max_consumer {
@@ -172,6 +189,15 @@ impl RingBufferMap {
     }
     // Controlled mutators:
 
+    /// Claims the producer ClientInformation on behalf of the
+    /// process identified by pid.  On success, the pid is returned
+    /// otherwise an error message is returned.  The main error is
+    /// that there's alreadya producer that's claimed the slot and it
+    /// is not the specified pid.  We allow claims by the pid that
+    /// already is producing just to be nice.  This can also allow different
+    /// sections of a producing program to (appropriately locking) contribute
+    /// data to same ring buffer.
+    ///
     pub fn set_producer(&mut self, pid: u32) -> Result<u32, String> {
         let mut producer = self.producer();
         if (producer.pid == UNUSED_ENTRY) || (producer.pid == pid) {
@@ -184,6 +210,14 @@ impl RingBufferMap {
             ))
         }
     }
+    ///
+    /// Marks the producer ClientInformation struct unused.  
+    /// This is legal if the pid parameter matches the pid
+    /// of the process that currently owns the ClientInformation
+    /// or the ClientInformation struct is already unused.  Producers
+    /// must call this _only_ after all puts to the ring buffer are
+    /// done.  
+    ///
     pub fn free_producer(&mut self, pid: u32) -> Result<u32, String> {
         let mut producer = self.producer();
 
@@ -200,6 +234,13 @@ impl RingBufferMap {
             ))
         }
     }
+    ///
+    /// sets the consumer slot n to be owned used by the process pid. On success
+    /// the pid is returned, otherwise an error message is returned.  Since
+    /// allocating a slot also resets its get pointer to the producer's put pointer,
+    /// multiple allocations by the same pid are _not_ allowed in contrast to
+    /// the producer slot -- where they are discouraged but allowed.
+    ///
     pub fn set_consumer(&mut self, n: usize, pid: u32) -> Result<u32, String> {
         let producer_offset = self.producer().offset; // snapshot producer offset.
         match self.consumer(n) {
@@ -220,7 +261,10 @@ impl RingBufferMap {
             Err(reason) => Err(reason),
         }
     }
-
+    ///
+    /// free consumer slot n the slot must either already be free or
+    /// owned by pid.  On success, the pid is returned.
+    /// 
     pub fn free_consumer(&mut self, n: usize, pid: u32) -> Result<u32, String> {
         match self.consumer(n) {
             Ok(cons) => {
