@@ -347,14 +347,12 @@ impl RingBufferMap {
         // Fill it in based on the producer/consumer info:
 
         let producer_offset = self.producer().offset;
-        println!("Producer: {}", producer_offset);
         let size = self.data_bytes();
         for cons in 0..self.max_consumers() {
-            println!("# {}", cons);
             let consumer = self.consumer(cons).unwrap();
             let consumer_pid = consumer.pid; // these prevent mutable
             let consumer_offset = consumer.offset; // immutable borrow conflicts
-            println!("Cons: {}", consumer_offset);
+
             if consumer.pid != UNUSED_ENTRY {
                 let avail = self.distance(consumer_offset, producer_offset);
 
@@ -711,7 +709,7 @@ mod tests {
             ring.consumer(i).unwrap().pid = UNUSED_ENTRY;
         }
         ring.set_consumer(4, consumer).unwrap();
-        ring.producer().offset = data_size - 1;
+        ring.producer().offset = ring.data_offset() + data_size - 1;
         ring.consumer(4).unwrap().offset = ring.top_offset();
 
         let status = ring.get_usage();
