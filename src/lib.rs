@@ -576,6 +576,18 @@ pub mod ringbuffer {
                 self.ring_buffer.lock().unwrap().get_usage().free_space
             }
         }
+        /// We want to be sure that the producer is freed if we
+        /// drop so:
+        ///
+        impl std::ops::Drop for Producer {
+            fn drop(&mut self) {
+                self.ring_buffer
+                    .lock()
+                    .unwrap()
+                    .free_producer(process::id())
+                    .unwrap();
+            }
+        }
     }
 
     // Note the tests below must be run:
@@ -1262,6 +1274,19 @@ pub mod ringbuffer {
                 .unwrap()
                 .free_producer(process::id())
                 .unwrap();
+        }
+        #[test]
+        fn drop_test() {
+            // If we drop a producer object the producer is freed:
+
+            let ring = RingBufferMap::new("poop").unwrap();
+            let safe_ring = producer::ThreadSafeRingBuffer::new(Mutex::new(ring));
+            {
+                let _p = producer::Producer::attach(&safe_ring).unwrap();
+                assert_eq!(process::id(), safe_ring.lock().unwrap().producer().pid);
+            }
+            // dropped so there's no producer:
+            assert_eq!(UNUSED_ENTRY, safe_ring.lock().unwrap().producer().pid);
         }
     }
 }
