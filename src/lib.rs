@@ -536,7 +536,7 @@ pub mod ringbuffer {
     // of a ring buffer is desired it should be wrapped in a mutex  e.g.
 
     #[cfg(test)]
-    mod tests {
+    mod map_tests {
         use super::*;
         use std::process;
         #[test]
