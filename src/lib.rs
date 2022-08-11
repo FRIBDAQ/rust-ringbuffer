@@ -504,7 +504,7 @@ pub mod ringbuffer {
 
         impl Producer {
             fn too_big(&mut self, nbytes: usize) -> bool {
-                nbytes > self.ring_buffer.lock().unwrap().data_bytes()
+                nbytes > self.capacity()
             }
             /// attach - this is how you get a new Producer object
             ///
@@ -551,22 +551,29 @@ pub mod ringbuffer {
                     let n = data.len();
                     let mut wait_time = Duration::from_secs(0);
                     let sleep_time = Duration::from_micros(100);
-                    let mut capacity = self.ring_buffer.lock().unwrap().get_usage();
-
-                    while capacity.free_space < n {
-                        println!("{:#?}", capacity);
+                    while self.free() < n {
                         thread::sleep(sleep_time);
                         wait_time = wait_time + sleep_time;
                         if wait_time > max_wait {
                             return Err(Error::Timeout);
-                        } else {
-                            capacity = self.ring_buffer.lock().unwrap().get_usage();
                         }
                     }
                     // if we fall here, we have space and did not timeout:
 
                     self.blocking_put(data) // It won't block.
                 }
+            }
+            ///
+            /// Returns the capacity of the ring buffer.
+            ///
+            pub fn capacity(&mut self) -> usize {
+                self.ring_buffer.lock().unwrap().data_bytes()
+            }
+            ///]
+            /// Returns the number of free bytes for put:
+            ///
+            pub fn free(&mut self) -> usize {
+                self.ring_buffer.lock().unwrap().get_usage().free_space
             }
         }
     }
@@ -1198,7 +1205,6 @@ pub mod ringbuffer {
                 .unwrap()
                 .free_producer(process::id())
                 .unwrap();
-            
         }
         #[test]
         fn tmo_put_fail2() {
@@ -1236,10 +1242,9 @@ pub mod ringbuffer {
         }
         #[test]
         fn tmo_put_ok() {
-          
             let mut ring = RingBufferMap::new("poop").unwrap();
             ring.producer().pid = UNUSED_ENTRY;
-            ring.producer().offset = ring.data_offset(); 
+            ring.producer().offset = ring.data_offset();
 
             let data: [u8; 2] = [0, 1];
 
@@ -1257,7 +1262,6 @@ pub mod ringbuffer {
                 .unwrap()
                 .free_producer(process::id())
                 .unwrap();
-            
         }
     }
 }
