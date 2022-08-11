@@ -450,7 +450,8 @@ pub mod ringbuffer {
     /// of this code.
     ///
     /// #### Important Note:
-    ///     In order to be thread-safe, the objects in this module
+    ///
+    /// In order to be thread-safe, the objects in this module
     /// don't encpasulate RingBufferMaps. but rather encapsulate
     /// ThreadSafeRingBuffer objects which are just RingBufferMap
     /// objects encapsulated in Arc/Mutex containers.  The code
@@ -467,8 +468,11 @@ pub mod ringbuffer {
 
         /// Possible errors in enum form.
         ///
+        #[derive(PartialEq, Debug)]
         pub enum Error {
             ProducerExists,
+            TooMuchData,
+            Timeout,
             Unimplemented,
         }
 
@@ -480,11 +484,13 @@ pub mod ringbuffer {
                 Error::ProducerExists => {
                     String::from("A producer already exists for this ringbuffer")
                 }
+                Error::TooMuchData => String::from("Attempting to produce too much data"),
+                Error::Timeout => String::from("Wait timed out"),
                 Error::Unimplemented => String::from("This feature is not yet implemented"),
             }
         }
 
-        type ThreadSafeRingBuffer = Arc<Mutex<RingBufferMap>>;
+        pub type ThreadSafeRingBuffer = Arc<Mutex<RingBufferMap>>;
         ///
         /// Creating this object will result in an attempt to allocate the
         /// producer slot of the ring buffer.  Thus creation _can_ fail  if
@@ -510,8 +516,11 @@ pub mod ringbuffer {
             /// Put data into the ring If necessary, we block
             /// until sufficient room is available.
             ///
-            pub fn blocking_put(&mut self, data: &[u8]) {
+            pub fn blocking_put(&mut self, data: &[u8]) -> Result<usize, Error> {
                 let nbytes = data.len();
+                if nbytes > self.ring_buffer.lock().unwrap().data_bytes() {
+                    return Err(Error::TooMuchData);
+                }
 
                 // Block if needed -- This is done by polling in 100usec
                 // intervals.
@@ -524,6 +533,7 @@ pub mod ringbuffer {
                 // Now we can do the copy.
 
                 self.ring_buffer.lock().unwrap().produce(data).unwrap();
+                Ok(nbytes)
             }
         }
     }
@@ -1026,6 +1036,93 @@ pub mod ringbuffer {
                 }
             }
             ring.free_producer(process::id()).unwrap();
+            ring.producer().offset = ring.data_offset();
+        }
+    }
+    #[cfg(test)]
+    mod producer_test {
+        use super::producer;
+        use super::*;
+        use std::sync::Mutex;
+        #[test]
+        fn create_ok() {
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            ring.producer().pid = UNUSED_ENTRY;
+
+            let safe_ring = producer::ThreadSafeRingBuffer::new(Mutex::new(ring));
+
+            // I should be able to create a producer:
+
+            let result = producer::Producer::attach(&safe_ring);
+            assert!(result.is_ok());
+            assert_eq!(process::id(), safe_ring.lock().unwrap().producer().pid);
+
+            safe_ring
+                .lock()
+                .unwrap()
+                .free_producer(process::id())
+                .unwrap();
+        }
+        #[test]
+        fn create_fail() {
+            // pre-init the producer to be someone else:
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            ring.producer().pid = process::id() + 1;
+
+            let safe_ring = producer::ThreadSafeRingBuffer::new(Mutex::new(ring));
+            let result = producer::Producer::attach(&safe_ring);
+            assert!(result.is_err());
+            if let Err(reason) = result {
+                assert_eq!(producer::Error::ProducerExists, reason);
+            } else {
+                panic!("Result should have been err");
+            }
+
+            safe_ring.lock().unwrap().producer().pid = UNUSED_ENTRY;
+        }
+        #[test]
+        fn produce_fail() {
+            // Will fail if I try to put too many bytes:
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            ring.producer().pid = UNUSED_ENTRY;
+            let max_bytes = ring.data_bytes();
+            let safe_ring = producer::ThreadSafeRingBuffer::new(Mutex::new(ring));
+
+            let mut producer = producer::Producer::attach(&safe_ring).unwrap();
+            let mut data = Vec::<u8>::new();
+            data.resize(max_bytes + 1, 0); // too many bytes.
+
+            let result = producer.blocking_put(&data);
+            assert!(result.is_err());
+            if let Err(status) = result {
+                assert_eq!(producer::Error::TooMuchData, status);
+            } else {
+                panic!("Expected error from blocking_put");
+            }
+
+            safe_ring.lock().unwrap().producer().pid = UNUSED_ENTRY;
+        }
+        #[test]
+        fn produce_ok() {
+            // Put a bit of data non-wrapping.  Need to get ok
+            // and size back. Note that we've tested the
+            // RingBufferMap::produce method so we don't need much checking.,
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            ring.producer().pid = UNUSED_ENTRY;
+            ring.producer().offset = ring.data_offset();
+
+            let safe_ring = producer::ThreadSafeRingBuffer::new(Mutex::new(ring));
+
+            let mut producer = producer::Producer::attach(&safe_ring).unwrap();
+            let data: Vec<u8> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+            let result = producer.blocking_put(&data);
+            assert!(result.is_ok());
+            if let Ok(n) = result {
+                assert_eq!(data.len(), n);
+            }
         }
     }
 }
