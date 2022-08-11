@@ -67,6 +67,7 @@ pub mod ringbuffer {
     /// and the free space the producer has to put data before
     /// running into that consumers get offset.
     ///
+    #[derive(Debug)]
     pub struct ConsumerUsage {
         pub pid: u32,
         pub free: usize,
@@ -89,6 +90,7 @@ pub mod ringbuffer {
     /// the existence of a producer.  This is because even after a producer exits,
     /// the consumers want to get any data from it that they've not yet gotten
     ///
+    #[derive(Debug)]
     pub struct RingStatus {
         pub producer_pid: u32,
         pub free_space: usize,
@@ -407,7 +409,7 @@ pub mod ringbuffer {
                 let bottom_offset = self.data_offset();
 
                 let dist_to_top = self.distance(put_offset, top_offset);
-                println!("to top: {} len{}", dist_to_top, data.len());
+
                 // Regardless we need a u8 pointer to the
                 // put area:
 
@@ -501,6 +503,9 @@ pub mod ringbuffer {
         }
 
         impl Producer {
+            fn too_big(&mut self, nbytes: usize) -> bool {
+                nbytes > self.ring_buffer.lock().unwrap().data_bytes()
+            }
             /// attach - this is how you get a new Producer object
             ///
             pub fn attach(ring: &ThreadSafeRingBuffer) -> Result<Producer, Error> {
@@ -518,7 +523,7 @@ pub mod ringbuffer {
             ///
             pub fn blocking_put(&mut self, data: &[u8]) -> Result<usize, Error> {
                 let nbytes = data.len();
-                if nbytes > self.ring_buffer.lock().unwrap().data_bytes() {
+                if self.too_big(nbytes) {
                     return Err(Error::TooMuchData);
                 }
 
@@ -534,6 +539,34 @@ pub mod ringbuffer {
 
                 self.ring_buffer.lock().unwrap().produce(data).unwrap();
                 Ok(nbytes)
+            }
+            /// put data into the ring  but only block for at most
+            /// the specified time.  If we can't get space for the data,
+            /// we return a timeout error.
+            ///
+            pub fn timed_put(&mut self, data: &[u8], max_wait: Duration) -> Result<usize, Error> {
+                if self.too_big(data.len()) {
+                    Err(Error::TooMuchData)
+                } else {
+                    let n = data.len();
+                    let mut wait_time = Duration::from_secs(0);
+                    let sleep_time = Duration::from_micros(100);
+                    let mut capacity = self.ring_buffer.lock().unwrap().get_usage();
+
+                    while capacity.free_space < n {
+                        println!("{:#?}", capacity);
+                        thread::sleep(sleep_time);
+                        wait_time = wait_time + sleep_time;
+                        if wait_time > max_wait {
+                            return Err(Error::Timeout);
+                        } else {
+                            capacity = self.ring_buffer.lock().unwrap().get_usage();
+                        }
+                    }
+                    // if we fall here, we have space and did not timeout:
+
+                    self.blocking_put(data) // It won't block.
+                }
             }
         }
     }
@@ -890,6 +923,7 @@ pub mod ringbuffer {
                 ring.consumer(i).unwrap().pid = UNUSED_ENTRY;
             }
             ring.free_producer(producer).unwrap();
+            ring.free_consumer(4, consumer).unwrap();
         }
         #[test]
         fn status_6() {
@@ -919,6 +953,8 @@ pub mod ringbuffer {
                 ring.consumer(i).unwrap().pid = UNUSED_ENTRY;
             }
             ring.free_producer(producer).unwrap();
+            ring.free_consumer(2, consumer).unwrap();
+            ring.free_consumer(3, consumer + 1).unwrap();
         }
         // test produce method:
 
@@ -1044,6 +1080,7 @@ pub mod ringbuffer {
         use super::producer;
         use super::*;
         use std::sync::Mutex;
+        use std::time::Duration;
         #[test]
         fn create_ok() {
             let mut ring = RingBufferMap::new("poop").unwrap();
@@ -1079,7 +1116,11 @@ pub mod ringbuffer {
                 panic!("Result should have been err");
             }
 
-            safe_ring.lock().unwrap().producer().pid = UNUSED_ENTRY;
+            safe_ring
+                .lock()
+                .unwrap()
+                .free_producer(process::id() + 1)
+                .unwrap();
         }
         #[test]
         fn produce_fail() {
@@ -1123,6 +1164,100 @@ pub mod ringbuffer {
             if let Ok(n) = result {
                 assert_eq!(data.len(), n);
             }
+            safe_ring
+                .lock()
+                .unwrap()
+                .free_producer(process::id())
+                .unwrap();
+        }
+        #[test]
+        fn tmo_put_fail1() {
+            // too much data:
+
+            // Will fail if I try to put too many bytes:
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            ring.producer().pid = UNUSED_ENTRY;
+            let max_bytes = ring.data_bytes();
+            let safe_ring = producer::ThreadSafeRingBuffer::new(Mutex::new(ring));
+
+            let mut producer = producer::Producer::attach(&safe_ring).unwrap();
+            let mut data = Vec::<u8>::new();
+            data.resize(max_bytes + 1, 0); // too many bytes.
+
+            let result = producer.timed_put(&data, Duration::from_secs(1));
+            assert!(result.is_err());
+            if let Err(status) = result {
+                assert_eq!(producer::Error::TooMuchData, status);
+            } else {
+                panic!("Expected error from blocking_put");
+            }
+
+            safe_ring
+                .lock()
+                .unwrap()
+                .free_producer(process::id())
+                .unwrap();
+            
+        }
+        #[test]
+        fn tmo_put_fail2() {
+            // Never get enough free space from the consumers.
+            // we'll rig it so the producer is 1 behind the consumer
+            // and, since we won't consume it'll timeout.
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            ring.producer().pid = UNUSED_ENTRY;
+            ring.producer().offset = ring.data_offset();
+
+            ring.consumer(1).unwrap().pid = process::id(); // cheat.
+            ring.consumer(1).unwrap().offset = ring.data_offset() + 1;
+
+            let data: [u8; 2] = [0, 1]; // two bytes but only one free.
+
+            let safe_ring = producer::ThreadSafeRingBuffer::new(Mutex::new(ring));
+            let mut p = producer::Producer::attach(&safe_ring).unwrap();
+            let result = p.timed_put(&data, Duration::from_millis(1));
+            assert!(result.is_err());
+            if let Err(status) = result {
+                assert_eq!(producer::Error::Timeout, status);
+            }
+
+            safe_ring
+                .lock()
+                .unwrap()
+                .free_producer(process::id())
+                .unwrap();
+            safe_ring
+                .lock()
+                .unwrap()
+                .free_consumer(1, process::id())
+                .unwrap();
+        }
+        #[test]
+        fn tmo_put_ok() {
+          
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            ring.producer().pid = UNUSED_ENTRY;
+            ring.producer().offset = ring.data_offset(); 
+
+            let data: [u8; 2] = [0, 1];
+
+            let safe_ring = producer::ThreadSafeRingBuffer::new(Mutex::new(ring));
+            let mut p = producer::Producer::attach(&safe_ring).unwrap();
+            let result = p.timed_put(&data, Duration::from_millis(1));
+
+            assert!(result.is_ok());
+            if let Ok(n) = result {
+                assert_eq!(data.len(), n);
+            }
+
+            safe_ring
+                .lock()
+                .unwrap()
+                .free_producer(process::id())
+                .unwrap();
+            
         }
     }
 }
