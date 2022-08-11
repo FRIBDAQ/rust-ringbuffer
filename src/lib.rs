@@ -407,13 +407,14 @@ pub mod ringbuffer {
                 let bottom_offset = self.data_offset();
 
                 let dist_to_top = self.distance(put_offset, top_offset);
+                println!("to top: {} len{}", dist_to_top, data.len());
                 // Regardless we need a u8 pointer to the
                 // put area:
 
-                let dest = self.map.as_mut_ptr() as *mut u8;
+                let mut dest = self.map.as_mut_ptr() as *mut u8;
                 let src = &data[0] as *const u8;
-                let dest = unsafe { dest.offset(put_offset as isize) }; // put pointer now.`
-                if dist_to_top <= data.len() {
+                dest = unsafe { dest.offset(put_offset as isize) }; // put pointer now.`
+                if data.len() <= dist_to_top + 1 {
                     unsafe {
                         ptr::copy_nonoverlapping(src, dest, data.len());
                     };
@@ -431,8 +432,8 @@ pub mod ringbuffer {
                     // Note that this point is not atomic as the put_offset
                     // is updated twice.
                     //
-                    self.produce(&data[0..self.distance(put_offset, top_offset)])?;
-                    self.produce(&data[self.distance(put_offset, top_offset)..])?;
+                    self.produce(&data[0..self.distance(put_offset, top_offset) + 1])?;
+                    self.produce(&data[self.distance(put_offset, top_offset) + 1..])?;
                     return Ok(data.len());
 
                     // The two recursive put calls already updated the producer
@@ -926,6 +927,105 @@ pub mod ringbuffer {
 
             let data: [u8; 10] = [0; 10];
             assert!(ring.produce(&data).is_err());
+            ring.free_producer(mypid + 1).unwrap();
+        }
+        #[test]
+        fn produce_err2() {
+            // produce more data than can fit.
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+
+            ring.producer().pid = UNUSED_ENTRY; // So we can allocated.
+            ring.producer().offset = ring.data_offset();
+            ring.set_producer(process::id()).unwrap();
+
+            let mut v = Vec::<u8>::new();
+            v.resize(ring.data_bytes() + 1, 0); //Too big by one byte.
+
+            assert!(ring.produce(v.as_ref()).is_err());
+
+            ring.free_producer(process::id()).unwrap();
+        }
+        #[test]
+        fn produce_err3() {
+            // produce more data than the free space allows:
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+
+            ring.producer().pid = UNUSED_ENTRY; // So we can allocate.
+            ring.producer().offset = ring.data_offset();
+            ring.consumer(0).unwrap().pid = UNUSED_ENTRY;
+
+            ring.set_producer(process::id()).unwrap();
+            ring.set_consumer(0, process::id()).unwrap();
+            ring.consumer(0).unwrap().offset = ring.data_offset() + 1; // only one byte free
+
+            let data: [u8; 2] = [0; 2]; // but we'll try to put 2 bytes.
+            assert!(ring.produce(&data).is_err());
+
+            ring.free_producer(process::id()).unwrap();
+            ring.free_consumer(0, process::id()).unwrap();
+        }
+        #[test]
+        fn produce_ok1() {
+            // Produce data that does not require a wrap.
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+
+            ring.producer().pid = UNUSED_ENTRY; // So we can allocate
+            ring.producer().offset = ring.data_offset();
+            ring.set_producer(process::id()).unwrap();
+
+            let data: [u8; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+            assert!(ring.produce(&data).is_ok());
+            assert_eq!(ring.data_offset() + 10, ring.producer().offset);
+
+            // The data should be in the ring (that's a bit harder)
+            // as it requires pointers and unsafeness:
+
+            let mut data = ring.map.as_mut_ptr() as *const u8;
+            data = unsafe { data.offset(ring.data_offset() as isize) };
+            for i in 0..10 {
+                unsafe {
+                    assert_eq!(i as u8, *data);
+                    data = data.offset(1);
+                }
+            }
+
+            ring.free_producer(process::id()).unwrap();
+        }
+        #[test]
+        fn produce_ok2() {
+            // if the put pointer is at the top of the
+            // circular buffer we can output a single byte then
+            // have to wrap.
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+
+            ring.producer().pid = UNUSED_ENTRY; // So we can allocate
+            ring.producer().offset = ring.top_offset();
+            ring.set_producer(process::id()).unwrap();
+
+            let data: [u8; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+            assert!(ring.produce(&data).is_ok());
+
+            // To test the data all went in the right place,
+            // we need to do some unsafe stuff:
+            // we should see a byte of 0 at top_offset and
+            // 9 bytes of 1..9 in the at data_offset:
+
+            let data = ring.map.as_mut_ptr() as *const u8;
+            let mut second_seg = unsafe { data.offset(ring.data_offset() as isize) };
+            let first_seg = unsafe { data.offset(ring.top_offset() as isize) };
+
+            assert_eq!(0, unsafe { *first_seg });
+            for i in 1..10 {
+                unsafe {
+                    assert_eq!(i, *second_seg);
+                    second_seg = second_seg.offset(1);
+                }
+            }
+            ring.free_producer(process::id()).unwrap();
         }
     }
 }
