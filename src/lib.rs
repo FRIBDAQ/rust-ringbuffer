@@ -11,6 +11,7 @@ pub mod ringbuffer {
 
     // *** IMPORTANT - see note prior to tests about how tests must be run.
     use memmap::MmapMut;
+    use std::cell::RefCell;
     use std::cmp;
     use std::fs::OpenOptions;
     use std::mem;
@@ -457,7 +458,111 @@ pub mod ringbuffer {
                     // The two recursive put calls already updated the producer
                     // offset pointer.
                 }
+                // Methods for consumers:
             }
+        }
+        ///
+        /// consumable bytes in a consumer:
+        ///
+        fn available_bytes(&self, consumer: &ClientInformation, poffset: usize) -> usize {
+            self.distance(consumer.offset, poffset)
+        }
+        ///
+        /// returns the number of bytes a consumer can consume from
+        /// the ringbuffer _now_.
+        ///
+        fn consumable_bytes(&mut self, cidx: u32) -> Result<usize, String> {
+            let poffset = self.producer().offset;
+            let c;
+            let coffset;
+
+            c = self.consumer(cidx as usize);
+            if let Ok(consumer) = c {
+                coffset = consumer.offset;
+                Ok(self.distance(coffset, poffset))
+            } else {
+                Err(String::from("Invalid consumer"))
+            }
+        }
+        fn consume_from(
+            &self,
+            consumer: &mut ClientInformation,
+            data: &mut [u8],
+            t: usize,
+        ) -> usize {
+            let toffset = t;
+            let coffset = consumer.offset;
+            let bytes_to_top = self.distance(coffset, toffset);
+            let bytes_to_read = data.len(); // Max we can read.
+
+            // Two cases:  The read is contiguous or it needs to be
+            // done in two contiguious gulps.
+
+            if bytes_to_read < bytes_to_top {
+                let mut src = self.map.as_ptr() as *const u8;
+                src = unsafe { src.offset(consumer.offset as isize) }; // get pointer now.`
+                let dest = &mut data[0] as *mut u8;
+
+                unsafe {
+                    ptr::copy_nonoverlapping(src, dest, data.len());
+                };
+                // atomically dust the consumer offset:
+
+                let mut new_offset = consumer.offset + bytes_to_read;
+                if new_offset == self.top_offset() {
+                    new_offset = self.data_offset();
+                }
+                consumer.offset = new_offset;
+            } else {
+                self.consume_from(consumer, &mut data[0..bytes_to_top], t);
+                self.consume_from(consumer, &mut data[bytes_to_top..], t);
+            }
+            bytes_to_read
+        }
+        ///
+        /// consumes at most the number of bytesfrom the consumer index
+        /// passed to us.  If fewer bytes are availbale (including 0)
+        /// that's returned.  The only errors possible are the
+        /// consumer index invalid or the pid passed does not own the
+        /// ring.
+        pub fn consume(&mut self, index: u32, pid: u32, data: &mut [u8]) -> Result<usize, String> {
+            // The tricky manuving with the consumer clone
+            // is needed in order to placate the borrow checker.
+            // just getting a consumer maintains a mutable reference
+            // to self which does not allow the immutable references
+            // that follow in method calls, so we clone the consumer
+            // do our dirty work and then put the offset back into
+            // the consumer in shared memory...this has the added
+            // advantage of being demonstrably atomic.
+
+            let t = self.top_offset();
+            let poffset = self.producer().offset;
+            let mut c;
+
+            if let Ok(consumer) = self.consumer(index as usize) {
+                c = consumer.clone();
+            } else {
+                return Err(String::from("Invalid consumer"));
+            }
+
+            if pid != c.pid {
+                return Err(format!(
+                    "{} does not own consumer {}, {} does",
+                    pid, index, c.pid
+                ));
+            }
+            let coffset = c.offset;
+            let consumable = self.distance(coffset, poffset);
+            let n;
+            if data.len() <= consumable {
+                n = self.consume_from(&mut c, &mut data[0..consumable], t);
+            } else {
+                n = self.consume_from(&mut c, data, t);
+            }
+            // Now we need to copy the offset back into the consumer:
+
+            self.consumer(index as usize).unwrap().offset = c.offset;
+            Ok(n)
         }
     }
 
@@ -615,6 +720,8 @@ pub mod ringbuffer {
     mod consumer {
         use super::*;
         use std::process;
+        use std::thread;
+        use std::time::Duration;
 
         #[derive(PartialEq, Debug)]
         pub enum Error {
@@ -641,6 +748,9 @@ pub mod ringbuffer {
         }
 
         impl Consumer {
+            fn too_big(&mut self, n: usize) -> bool {
+                n > self.map.lock().unwrap().data_bytes()
+            }
             /// Create a new consumer.  Note that this can fail
             /// if there are no free consumer slots available.
             ///
@@ -659,8 +769,31 @@ pub mod ringbuffer {
                     None => Err(Error::NoFreeConsumers),
                 }
             }
-            pub fn blocking_get(&mut self, data: &[u8]) -> Result<usize, Error> {
-                Err(Error::Unimplemented)
+            ///
+            /// Get data from the ring - blocking, if necessary,
+            /// until the full get can be satisfied.
+            ///
+            pub fn blocking_get(&mut self, data: &mut [u8]) -> Result<usize, Error> {
+                if self.too_big(data.len()) {
+                    return Err(Error::TooMuchData);
+                }
+                let poll_period = Duration::from_micros(100);
+                if self
+                    .map
+                    .lock()
+                    .unwrap()
+                    .consumable_bytes(self.index)
+                    .unwrap()
+                    < data.len()
+                {
+                    thread::sleep(poll_period);
+                }
+                Ok(self
+                    .map
+                    .lock()
+                    .unwrap()
+                    .consume(self.index, self.mypid, data)
+                    .unwrap())
             }
             pub fn timed_get(&mut self, data: &[u8]) -> Result<usize, Error> {
                 Err(Error::Unimplemented)
