@@ -1171,6 +1171,47 @@ pub mod ringbuffer {
             ring.free_producer(process::id()).unwrap();
             ring.producer().offset = ring.data_offset();
         }
+        #[test]
+        fn first_free1() {
+            // All free.
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            for i in 0..ring.max_consumers() {
+                ring.consumer(i).unwrap().pid = UNUSED_ENTRY;
+            }
+            let result = ring.first_free_consumer();
+            assert!(result.is_some());
+            assert_eq!(Some(0), result);
+        }
+        #[test]
+        fn first_free2() {
+            // first one not free:
+            // All free.
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            for i in 0..ring.max_consumers() {
+                ring.consumer(i).unwrap().pid = UNUSED_ENTRY;
+            }
+            ring.consumer(0).unwrap().pid = 123;
+            let result = ring.first_free_consumer();
+            assert!(result.is_some());
+            assert_eq!(Some(1), result);
+
+            ring.free_consumer(0, 123).unwrap();
+        }
+        #[test]
+        fn first_free3() {
+            // none free:
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            for i in 0..ring.max_consumers() {
+                ring.consumer(i).unwrap().pid = 123;
+            }
+
+            let result = ring.first_free_consumer();
+            assert_eq!(None, result);
+
+            for i in 0..ring.max_consumers() {
+                ring.consumer(i).unwrap().pid = UNUSED_ENTRY;
+            }
+        }
     }
     #[cfg(test)]
     mod producer_test {
