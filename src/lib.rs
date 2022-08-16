@@ -392,6 +392,18 @@ pub mod ringbuffer {
             }
         }
         ///
+        /// Get the index of the first free consumer:
+        ///
+        fn first_free_consumer(&mut self) -> Option<u32> {
+            let ncons = self.max_consumers();
+            for i in 0..ncons {
+                if self.consumer(i).unwrap().pid == UNUSED_ENTRY {
+                    return Some(i as u32);
+                }
+            }
+            None
+        }
+        ///
         /// Produce data into the ring:
         /// - The process doing this must own the producer.
         /// - There must be sufficent free space in the ring.
@@ -601,7 +613,59 @@ pub mod ringbuffer {
     /// released on drop.
     ///
     mod consumer {
-        struct Consumer {}
+        use super::*;
+        use std::process;
+
+        #[derive(PartialEq, Debug)]
+        pub enum Error {
+            NoFreeConsumers,
+            TooMuchData,
+            Timeout,
+            Unimplemented,
+        }
+        pub fn error_string(e: &Error) -> String {
+            match e {
+                Error::NoFreeConsumers => String::from("There are no free consumer slots"),
+                Error::TooMuchData => {
+                    String::from("Attempting to consume more data than the ring sizse")
+                }
+                Error::Timeout => String::from("Wait for data timed out"),
+                Error::Unimplemented => String::from("This feature is not yet implemented"),
+            }
+        }
+
+        struct Consumer {
+            map: ThreadSafeRingBuffer,
+            index: u32,
+            mypid: u32,
+        }
+
+        impl Consumer {
+            /// Create a new consumer.  Note that this can fail
+            /// if there are no free consumer slots available.
+            ///
+            pub fn attach(ring: &ThreadSafeRingBuffer) -> Result<Consumer, Error> {
+                let mut locked_ring = ring.lock().unwrap();
+                match locked_ring.first_free_consumer() {
+                    Some(n) => {
+                        let pid = process::id();
+                        locked_ring.set_consumer(n as usize, pid).unwrap();
+                        Ok(Consumer {
+                            map: Arc::clone(ring),
+                            index: n,
+                            mypid: pid,
+                        })
+                    }
+                    None => Err(Error::NoFreeConsumers),
+                }
+            }
+            pub fn blocking_get(&mut self, data: &[u8]) -> Result<usize, Error> {
+                Err(Error::Unimplemented)
+            }
+            pub fn timed_get(&mut self, data: &[u8]) -> Result<usize, Error> {
+                Err(Error::Unimplemented)
+            }
+        }
     }
 
     // Note the tests below must be run:
