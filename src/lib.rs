@@ -18,9 +18,13 @@ pub mod ringbuffer {
     use std::ptr;
     use std::str;
     use std::string::ToString;
+    use std::sync::Arc;
+    use std::sync::Mutex;
 
     static MAGIC_STRING: &str = "NSCLRing";
     static UNUSED_ENTRY: u32 = 0xffffffff;
+
+    pub type ThreadSafeRingBuffer = Arc<Mutex<RingBufferMap>>;
     ///
     /// RingHeader
     ///    is the header of a ring buffer:
@@ -463,8 +467,7 @@ pub mod ringbuffer {
     pub mod producer {
         use super::*;
         use std::process;
-        use std::sync::Arc;
-        use std::sync::Mutex;
+
         use std::thread;
         use std::time::Duration;
 
@@ -492,7 +495,6 @@ pub mod ringbuffer {
             }
         }
 
-        pub type ThreadSafeRingBuffer = Arc<Mutex<RingBufferMap>>;
         ///
         /// Creating this object will result in an attempt to allocate the
         /// producer slot of the ring buffer.  Thus creation _can_ fail  if
@@ -588,6 +590,18 @@ pub mod ringbuffer {
                     .unwrap();
             }
         }
+    }
+    ///
+    /// Implementation of consumer.
+    ///   Consumer, of course consume data from
+    /// a ring buffer.  We therefore will have a ring buffer map
+    /// and a consumer index.   The consumer index will be
+    /// allocated by the map object.  Normally all of this
+    /// we'll use a drop trait to ensure that our allocaton is
+    /// released on drop.
+    ///
+    mod consumer {
+        struct Consumer {}
     }
 
     // Note the tests below must be run:
@@ -1105,7 +1119,7 @@ pub mod ringbuffer {
             let mut ring = RingBufferMap::new("poop").unwrap();
             ring.producer().pid = UNUSED_ENTRY;
 
-            let safe_ring = producer::ThreadSafeRingBuffer::new(Mutex::new(ring));
+            let safe_ring = ThreadSafeRingBuffer::new(Mutex::new(ring));
 
             // I should be able to create a producer:
 
@@ -1126,7 +1140,7 @@ pub mod ringbuffer {
             let mut ring = RingBufferMap::new("poop").unwrap();
             ring.producer().pid = process::id() + 1;
 
-            let safe_ring = producer::ThreadSafeRingBuffer::new(Mutex::new(ring));
+            let safe_ring = ThreadSafeRingBuffer::new(Mutex::new(ring));
             let result = producer::Producer::attach(&safe_ring);
             assert!(result.is_err());
             if let Err(reason) = result {
@@ -1148,7 +1162,7 @@ pub mod ringbuffer {
             let mut ring = RingBufferMap::new("poop").unwrap();
             ring.producer().pid = UNUSED_ENTRY;
             let max_bytes = ring.data_bytes();
-            let safe_ring = producer::ThreadSafeRingBuffer::new(Mutex::new(ring));
+            let safe_ring = ThreadSafeRingBuffer::new(Mutex::new(ring));
 
             let mut producer = producer::Producer::attach(&safe_ring).unwrap();
             let mut data = Vec::<u8>::new();
@@ -1174,7 +1188,7 @@ pub mod ringbuffer {
             ring.producer().pid = UNUSED_ENTRY;
             ring.producer().offset = ring.data_offset();
 
-            let safe_ring = producer::ThreadSafeRingBuffer::new(Mutex::new(ring));
+            let safe_ring = ThreadSafeRingBuffer::new(Mutex::new(ring));
 
             let mut producer = producer::Producer::attach(&safe_ring).unwrap();
             let data: Vec<u8> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
@@ -1198,7 +1212,7 @@ pub mod ringbuffer {
             let mut ring = RingBufferMap::new("poop").unwrap();
             ring.producer().pid = UNUSED_ENTRY;
             let max_bytes = ring.data_bytes();
-            let safe_ring = producer::ThreadSafeRingBuffer::new(Mutex::new(ring));
+            let safe_ring = ThreadSafeRingBuffer::new(Mutex::new(ring));
 
             let mut producer = producer::Producer::attach(&safe_ring).unwrap();
             let mut data = Vec::<u8>::new();
@@ -1233,7 +1247,7 @@ pub mod ringbuffer {
 
             let data: [u8; 2] = [0, 1]; // two bytes but only one free.
 
-            let safe_ring = producer::ThreadSafeRingBuffer::new(Mutex::new(ring));
+            let safe_ring = ThreadSafeRingBuffer::new(Mutex::new(ring));
             let mut p = producer::Producer::attach(&safe_ring).unwrap();
             let result = p.timed_put(&data, Duration::from_millis(1));
             assert!(result.is_err());
@@ -1260,7 +1274,7 @@ pub mod ringbuffer {
 
             let data: [u8; 2] = [0, 1];
 
-            let safe_ring = producer::ThreadSafeRingBuffer::new(Mutex::new(ring));
+            let safe_ring = ThreadSafeRingBuffer::new(Mutex::new(ring));
             let mut p = producer::Producer::attach(&safe_ring).unwrap();
             let result = p.timed_put(&data, Duration::from_millis(1));
 
@@ -1280,7 +1294,7 @@ pub mod ringbuffer {
             // If we drop a producer object the producer is freed:
 
             let ring = RingBufferMap::new("poop").unwrap();
-            let safe_ring = producer::ThreadSafeRingBuffer::new(Mutex::new(ring));
+            let safe_ring = ThreadSafeRingBuffer::new(Mutex::new(ring));
             {
                 let _p = producer::Producer::attach(&safe_ring).unwrap();
                 assert_eq!(process::id(), safe_ring.lock().unwrap().producer().pid);
