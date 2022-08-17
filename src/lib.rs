@@ -577,7 +577,7 @@ pub mod ringbuffer {
     /// ability to talk to the ring master process.  That must be layered on top
     /// of this code.
     ///
-    /// #### Important Note:
+    /// ### Important Note:
     ///
     /// In order to be thread-safe, the objects in this module
     /// don't encpasulate RingBufferMaps. but rather encapsulate
@@ -722,9 +722,10 @@ pub mod ringbuffer {
     /// we'll use a drop trait to ensure that our allocaton is
     /// released on drop.
     ///
-    mod consumer {
-        use super::*;
+    pub mod consumer {
+        use super::ThreadSafeRingBuffer;
         use std::process;
+        use std::sync::Arc;
         use std::thread;
         use std::time::Duration;
 
