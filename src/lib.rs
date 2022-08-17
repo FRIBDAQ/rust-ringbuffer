@@ -1906,6 +1906,7 @@ pub mod ringbuffer {
         use super::producer;
         use super::*;
         use std::process;
+        use std::time::Duration;
         #[test]
         fn attach_1() {
             // can attach:
@@ -1993,5 +1994,68 @@ pub mod ringbuffer {
             }
         }
         // consume tests that gave timed waits.:
+
+        #[test]
+        fn tmo_consume1() {
+            // No data evern - timeout error.
+
+            let ring = RingBufferMap::new("poop").unwrap();
+            let safe_ring = ThreadSafeRingBuffer::new(Mutex::new(ring));
+            let mut consumer = consumer::Consumer::attach(&safe_ring).unwrap();
+
+            // This should timeout:
+            let mut data: [u8; 1] = [0xff];
+            if let Err(e) = consumer.timed_get(&mut data, Duration::from_millis(10)) {
+                assert_eq!(consumer::Error::Timeout, e);
+            } else {
+                assert!(false, "Was supposed to fail");
+            }
+        }
+        #[test]
+        fn tmo_consume2() {
+            // Read is fully satisfied:
+
+            let ring = RingBufferMap::new("poop").unwrap();
+            let safe_ring = ThreadSafeRingBuffer::new(Mutex::new(ring));
+            let mut consumer = consumer::Consumer::attach(&safe_ring).unwrap();
+            let mut producer = producer::Producer::attach(&safe_ring).unwrap();
+
+            let produced: [u8; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+            let mut consumed: [u8; 10] = [0xff; 10];
+
+            producer.blocking_put(&produced).unwrap();
+
+            if let Ok(n) = consumer.timed_get(&mut consumed, Duration::from_millis(10)) {
+                assert_eq!(produced.len(), n);
+                for i in 0..produced.len() {
+                    assert_eq!(produced[i], consumed[i]);
+                }
+            } else {
+                assert!(false, "Should have succeeded");
+            }
+        }
+        #[test]
+        fn tmo_consume_3() {
+            // get partially satisfied after timeout:
+
+            let ring = RingBufferMap::new("poop").unwrap();
+            let safe_ring = ThreadSafeRingBuffer::new(Mutex::new(ring));
+            let mut consumer = consumer::Consumer::attach(&safe_ring).unwrap();
+            let mut producer = producer::Producer::attach(&safe_ring).unwrap();
+
+            let produced: [u8; 5] = [0, 1, 2, 3, 4];
+            let mut consumed: [u8; 10] = [0xff; 10];
+
+            producer.blocking_put(&produced).unwrap();
+
+            if let Ok(n) = consumer.timed_get(&mut consumed, Duration::from_millis(10)) {
+                assert_eq!(produced.len(), n);
+                for i in 0..produced.len() {
+                    assert_eq!(produced[i], consumed[i]);
+                }
+            } else {
+                assert!(false, "Should have succeeded");
+            }
+        }
     }
 }
