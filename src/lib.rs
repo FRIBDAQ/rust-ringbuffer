@@ -804,6 +804,15 @@ pub mod ringbuffer {
                 Err(Error::Unimplemented)
             }
         }
+        impl std::ops::Drop for Consumer {
+            fn drop(&mut self) {
+                self.map
+                    .lock()
+                    .unwrap()
+                    .free_consumer(self.index as usize, process::id())
+                    .unwrap();
+            }
+        }
     }
 
     // Note the tests below must be run:
@@ -1836,5 +1845,11 @@ pub mod ringbuffer {
             // dropped so there's no producer:
             assert_eq!(UNUSED_ENTRY, safe_ring.lock().unwrap().producer().pid);
         }
+    }
+    #[cfg(test)]
+    mod consumer_tests {
+        use super::consumer;
+        use super::producer;
+        use super::*;
     }
 }
