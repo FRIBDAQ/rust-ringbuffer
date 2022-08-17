@@ -795,7 +795,7 @@ pub mod ringbuffer {
                     return Err(Error::TooMuchData);
                 }
                 let poll_period = Duration::from_micros(100);
-                if self
+                while self
                     .map
                     .lock()
                     .unwrap()
@@ -1893,7 +1893,8 @@ pub mod ringbuffer {
             // No free consumers:
 
             let mut ring = RingBufferMap::new("poop").unwrap();
-            for i in 0..ring.max_consumers() {
+            let max = ring.max_consumers();
+            for i in 0..max {
                 ring.consumer(i).unwrap().pid = 0; // In use.
             }
 
@@ -1902,6 +1903,51 @@ pub mod ringbuffer {
                 assert_eq!(consumer::Error::NoFreeConsumers, e);
             } else {
                 assert!(false, "Should have failed!!");
+            }
+            for i in 0..max {
+                safe_ring.lock().unwrap().consumer(i).unwrap().pid = UNUSED_ENTRY;
+            }
+        }
+        #[test]
+        fn consume_1() {
+            // Fail because we ask too much.  This does not depend on
+            // data:
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            let mut data: Vec<u8> = vec![];
+            data.resize(ring.data_bytes() + 1, 0xff);
+
+            let safe_ring = ThreadSafeRingBuffer::new(Mutex::new(ring));
+            let mut c = consumer::Consumer::attach(&safe_ring).unwrap();
+
+            let result = c.blocking_get(&mut data);
+            if let Err(e) = result {
+                assert_eq!(consumer::Error::TooMuchData, e);
+            } else {
+                assert!(false, "Should have failed");
+            }
+        }
+        #[test]
+        fn consume_2() {
+            // blocking consume for data that's available.
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            let safe_ring = ThreadSafeRingBuffer::new(Mutex::new(ring));
+            let mut producer = producer::Producer::attach(&safe_ring).unwrap();
+            let mut consumer = consumer::Consumer::attach(&safe_ring).unwrap();
+
+            let produced: [u8; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+            producer.blocking_put(&produced).unwrap();
+
+            let mut consumed: [u8; 10] = [0xff; 10];
+            let result = consumer.blocking_get(&mut consumed);
+            if let Ok(n) = result {
+                assert_eq!(produced.len(), n);
+                for i in 0..produced.len() {
+                    assert_eq!(produced[i], consumed[i]);
+                }
+            } else {
+                assert!(false, " Should have worked");
             }
         }
     }
