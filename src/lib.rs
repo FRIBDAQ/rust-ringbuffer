@@ -11,7 +11,6 @@ pub mod ringbuffer {
 
     // *** IMPORTANT - see note prior to tests about how tests must be run.
     use memmap::MmapMut;
-    use std::cell::RefCell;
     use std::cmp;
     use std::fs::OpenOptions;
     use std::mem;
@@ -461,16 +460,16 @@ pub mod ringbuffer {
                 // Methods for consumers:
             }
         }
-        ///
-        /// consumable bytes in a consumer:
-        ///
+        //
+        // consumable bytes in a consumer:
+        //
         fn available_bytes(&self, consumer: &ClientInformation, poffset: usize) -> usize {
             self.distance(consumer.offset, poffset)
         }
-        ///
-        /// returns the number of bytes a consumer can consume from
-        /// the ringbuffer _now_.
-        ///
+        //
+        // returns the number of bytes a consumer can consume from
+        // the ringbuffer _now_.
+        //
         fn consumable_bytes(&mut self, cidx: u32) -> Result<usize, String> {
             let poffset = self.producer().offset;
             let c;
@@ -483,6 +482,9 @@ pub mod ringbuffer {
                 Err(String::from("Invalid consumer"))
             }
         }
+        // Note that the caller must ensure that there's at least
+        // data.len() bytes available to the consumer.
+        //
         fn consume_from(
             &self,
             consumer: &mut ClientInformation,
@@ -492,29 +494,29 @@ pub mod ringbuffer {
             let toffset = t;
             let coffset = consumer.offset;
             let bytes_to_top = self.distance(coffset, toffset);
+
             let bytes_to_read = data.len(); // Max we can read.
 
             // Two cases:  The read is contiguous or it needs to be
             // done in two contiguious gulps.
 
-            if bytes_to_read < bytes_to_top {
+            if bytes_to_read <= bytes_to_top + 1 {
                 let mut src = self.map.as_ptr() as *const u8;
                 src = unsafe { src.offset(consumer.offset as isize) }; // get pointer now.`
                 let dest = &mut data[0] as *mut u8;
-
                 unsafe {
-                    ptr::copy_nonoverlapping(src, dest, data.len());
+                    ptr::copy_nonoverlapping(src, dest, bytes_to_read);
                 };
                 // atomically dust the consumer offset:
 
                 let mut new_offset = consumer.offset + bytes_to_read;
-                if new_offset == self.top_offset() {
+                if new_offset > self.top_offset() {
                     new_offset = self.data_offset();
                 }
                 consumer.offset = new_offset;
             } else {
-                self.consume_from(consumer, &mut data[0..bytes_to_top], t);
-                self.consume_from(consumer, &mut data[bytes_to_top..], t);
+                self.consume_from(consumer, &mut data[0..bytes_to_top + 1], t);
+                self.consume_from(consumer, &mut data[bytes_to_top + 1..], t);
             }
             bytes_to_read
         }
@@ -552,8 +554,12 @@ pub mod ringbuffer {
             }
             let coffset = c.offset;
             let consumable = self.distance(coffset, poffset);
+            println!("Requested {} Available {}", data.len(), consumable);
+            if consumable == 0 {
+                return Ok(0);
+            }
             let n;
-            if data.len() <= consumable {
+            if consumable < data.len() {
                 n = self.consume_from(&mut c, &mut data[0..consumable], t);
             } else {
                 n = self.consume_from(&mut c, data, t);
@@ -1405,6 +1411,7 @@ pub mod ringbuffer {
             if let Ok(n) = result {
                 assert_eq!(1, n);
             }
+            ring.producer().offset = ring.data_offset();
         }
         #[test]
         fn consumable_3() {
@@ -1417,6 +1424,184 @@ pub mod ringbuffer {
             if let Ok(n) = result {
                 assert_eq!(ring.data_bytes() - 1, n);
             }
+            ring.consumer(0).unwrap().offset = ring.data_offset();
+        }
+        // Consume from tests
+        // note that the caller must have already determined there
+        // is at least one byte available byt this time.
+        //
+        #[test]
+        fn consume_from_1() {
+            // one byte:
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+
+            ring.producer().offset = ring.data_offset();
+            ring.producer().pid = process::id();
+
+            let data: [u8; 1] = [0];
+            ring.produce(&data).unwrap(); // put one byte in.
+
+            let mut c = ClientInformation {
+                offset: ring.data_offset(),
+                pid: 1234,
+            };
+            let t = ring.top_offset();
+            let mut data: [u8; 1] = [0xff];
+            assert_eq!(1, ring.consume_from(&mut c, &mut data, t));
+            assert_eq!(0, data[0]);
+
+            ring.producer().offset = ring.data_offset();
+            ring.producer().pid = UNUSED_ENTRY;
+        }
+        #[test]
+        fn consume_from_2() {
+            // a few bytes but no wrap.__rust_force_expr!
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            ring.producer().offset = ring.data_offset();
+            ring.producer().pid = process::id();
+
+            let data: [u8; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+            ring.produce(&data).unwrap();
+
+            let mut c = ClientInformation {
+                offset: ring.data_offset(),
+                pid: 1234,
+            };
+            let t = ring.top_offset();
+            let mut data: [u8; 10] = [0; 10];
+            assert_eq!(data.len(), ring.consume_from(&mut c, &mut data, t));
+            for i in 0..data.len() {
+                assert_eq!(i as u8, data[i]);
+            }
+
+            ring.producer().offset = ring.data_offset();
+            ring.producer().pid = UNUSED_ENTRY;
+        }
+        #[test]
+        fn consume_from_3() {
+            // several wrapping bytes
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            ring.producer().offset = ring.top_offset() - 5;
+            ring.producer().pid = process::id();
+
+            let data: [u8; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+            ring.produce(&data).unwrap();
+
+            let mut c = ClientInformation {
+                offset: ring.top_offset() - 5,
+                pid: 1234,
+            };
+            let t = ring.top_offset();
+            let mut data: [u8; 10] = [0; 10];
+            assert_eq!(data.len(), ring.consume_from(&mut c, &mut data, t));
+            for i in 0..data.len() {
+                assert_eq!(i as u8, data[i]);
+            }
+
+            ring.producer().offset = ring.data_offset();
+            ring.producer().pid = UNUSED_ENTRY;
+        }
+        #[test]
+        fn consume_err1() {
+            // invalid consumer.
+            let mut ring = RingBufferMap::new("poop").unwrap();
+
+            // Bad consumer index
+
+            let mut data: [u8; 1] = [0];
+            let index = ring.max_consumers() as u32;
+            let result = ring.consume(index, process::id(), &mut data);
+            assert!(result.is_err());
+        }
+        #[test]
+        fn consume_err2() {
+            // not owner.
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            ring.consumer(0).unwrap().pid = UNUSED_ENTRY;
+            let mut data: [u8; 1] = [0];
+
+            let result = ring.consume(0, process::id(), &mut data);
+            assert!(result.is_err());
+        }
+        #[test]
+        fn consume_1() {
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            let pid = process::id();
+            ring.set_producer(pid).unwrap();
+            ring.set_consumer(0, pid).unwrap();
+
+            // Nothing to consume:
+
+            let mut data: [u8; 1] = [0];
+            let result = ring.consume(0, pid, &mut data);
+            assert!(result.is_ok());
+            if let Ok(n) = result {
+                assert_eq!(0, n);
+            }
+
+            ring.free_producer(pid).unwrap();
+            ring.free_consumer(0, pid).unwrap();
+        }
+        #[test]
+        fn consume_2() {
+            // There's the exact requested qty of data.
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            let pid = process::id();
+            ring.set_producer(pid).unwrap();
+            ring.set_consumer(0, pid).unwrap();
+
+            // produce 10 byte counting pattern:
+
+            let produced: [u8; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+            ring.produce(&produced).unwrap();
+
+            // Should be able to get 10 byte counting pattern:
+
+            let mut data: [u8; 10] = [0xff; 10];
+            if let Ok(n) = ring.consume(0, pid, &mut data) {
+                assert_eq!(produced.len(), n);
+                for i in 0..produced.len() {
+                    assert_eq!(produced[i], data[i]);
+                }
+            } else {
+                assert!(false, "Should have gotten Ok from consume");
+            }
+
+            ring.free_producer(pid).unwrap();
+            ring.free_consumer(0, pid).unwrap();
+        }
+        #[test]
+        fn consume_3() {
+            // Too little data to satisfy the request..we get what's
+            // there.
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            let pid = process::id();
+            ring.set_producer(pid).unwrap();
+            ring.set_consumer(0, pid).unwrap();
+
+            // produce 10 byte counting pattern:
+
+            let produced: [u8; 5] = [0, 1, 2, 3, 4];
+            ring.produce(&produced).unwrap();
+
+            let mut data: [u8; 10] = [0xff; 10];
+            let mut data: [u8; 10] = [0xff; 10];
+            if let Ok(n) = ring.consume(0, pid, &mut data) {
+                assert_eq!(produced.len(), n);
+                for i in 0..produced.len() {
+                    assert_eq!(produced[i], data[i]);
+                }
+            } else {
+                assert!(false, "Should have gotten Ok from consume");
+            }
+
+            ring.free_producer(pid).unwrap();
+            ring.free_consumer(0, pid).unwrap();
         }
     }
     #[cfg(test)]
