@@ -812,8 +812,37 @@ pub mod ringbuffer {
                     .consume(self.index, self.mypid, data)
                     .unwrap())
             }
-            pub fn timed_get(&mut self, data: &[u8]) -> Result<usize, Error> {
-                Err(Error::Unimplemented)
+            ///
+            ///  Wait for data (if needed) only when the wait time exceeds
+            /// the timeout.  At that time, get the data that's available.
+            ///
+            pub fn timed_get(
+                &mut self,
+                data: &mut [u8],
+                timeout: Duration,
+            ) -> Result<usize, Error> {
+                if self.too_big(data.len()) {
+                    return Err(Error::TooMuchData);
+                } else {
+                    let poll_period = Duration::from_micros(100);
+                    let mut waited = Duration::from_micros(0);
+                    while waited < timeout {
+                        if self
+                            .map
+                            .lock()
+                            .unwrap()
+                            .consumable_bytes(self.index)
+                            .unwrap()
+                            >= data.len()
+                        {
+                            return self.blocking_get(data);
+                        } else {
+                            thread::sleep(poll_period);
+                            waited = waited + poll_period;
+                        }
+                    }
+                    return Err(Error::Timeout);
+                }
             }
         }
         impl std::ops::Drop for Consumer {
@@ -1950,5 +1979,6 @@ pub mod ringbuffer {
                 assert!(false, " Should have worked");
             }
         }
+        // consume tests that gave timed waits.:
     }
 }
