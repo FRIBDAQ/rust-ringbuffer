@@ -1590,7 +1590,6 @@ pub mod ringbuffer {
             ring.produce(&produced).unwrap();
 
             let mut data: [u8; 10] = [0xff; 10];
-            let mut data: [u8; 10] = [0xff; 10];
             if let Ok(n) = ring.consume(0, pid, &mut data) {
                 assert_eq!(produced.len(), n);
                 for i in 0..produced.len() {
@@ -1598,6 +1597,45 @@ pub mod ringbuffer {
                 }
             } else {
                 assert!(false, "Should have gotten Ok from consume");
+            }
+
+            ring.free_producer(pid).unwrap();
+            ring.free_consumer(0, pid).unwrap();
+        }
+        #[test]
+        fn consume_4() {
+            // Multiple consumes:
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            let pid = process::id();
+            ring.set_producer(pid).unwrap();
+            ring.set_consumer(0, pid).unwrap();
+
+            // produce 10 byte counting pattern:
+
+            let produced: [u8; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+            ring.produce(&produced).unwrap();
+
+            // first 1/2
+
+            let mut data: [u8; 5] = [0xff; 5];
+            if let Ok(n) = ring.consume(0, pid, &mut data) {
+                assert_eq!(n, data.len());
+                for i in 0..n {
+                    assert_eq!(i, data[i] as usize);
+                }
+            } else {
+                assert!(false, "Should have been ok");
+            }
+            // second 1/2
+
+            if let Ok(n) = ring.consume(0, pid, &mut data) {
+                assert_eq!(n, data.len());
+                for i in 0..n {
+                    assert_eq!(i + 5, data[i] as usize);
+                }
+            } else {
+                assert!(false, "Should have been ok2");
             }
 
             ring.free_producer(pid).unwrap();
