@@ -1377,6 +1377,48 @@ pub mod ringbuffer {
             };
             assert_eq!(ring.data_bytes() - 1, ring.available_bytes(&c, poffset));
         }
+        #[test]
+        fn consumable_err() {
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            let max_consumers = ring.max_consumers();
+            assert!(ring.consumable_bytes(max_consumers as u32 + 1).is_err());
+        }
+        #[test]
+        fn consumable_1() {
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            ring.producer().offset = ring.data_offset();
+            ring.consumer(0).unwrap().offset = ring.data_offset();
+
+            let result = ring.consumable_bytes(0);
+            assert!(result.is_ok());
+            if let Ok(n) = result {
+                assert_eq!(0, n);
+            }
+        }
+        #[test]
+        fn consumable_2() {
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            ring.producer().offset = ring.data_offset() + 1;
+            ring.consumer(0).unwrap().offset = ring.data_offset();
+
+            let result = ring.consumable_bytes(0);
+            assert!(result.is_ok());
+            if let Ok(n) = result {
+                assert_eq!(1, n);
+            }
+        }
+        #[test]
+        fn consumable_3() {
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            ring.producer().offset = ring.data_offset();
+            ring.consumer(0).unwrap().offset = ring.data_offset() + 1;
+
+            let result = ring.consumable_bytes(0);
+            assert!(result.is_ok());
+            if let Ok(n) = result {
+                assert_eq!(ring.data_bytes() - 1, n);
+            }
+        }
     }
     #[cfg(test)]
     mod producer_test {
