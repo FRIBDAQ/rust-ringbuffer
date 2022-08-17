@@ -814,7 +814,8 @@ pub mod ringbuffer {
             }
             ///
             ///  Wait for data (if needed) only when the wait time exceeds
-            /// the timeout.  At that time, get the data that's available.
+            /// the timeout.  If there's no data in the ring, return
+            /// a timeout, else return what's there.
             ///
             pub fn timed_get(
                 &mut self,
@@ -841,7 +842,19 @@ pub mod ringbuffer {
                             waited = waited + poll_period;
                         }
                     }
-                    return Err(Error::Timeout);
+                    // Wait timed out and not all the data:
+
+                    let data_available = self
+                        .map
+                        .lock()
+                        .unwrap()
+                        .consumable_bytes(self.index)
+                        .unwrap();
+                    if data_available > 0 {
+                        return self.blocking_get(&mut data[0..data_available]);
+                    } else {
+                        return Err(Error::Timeout);
+                    }
                 }
             }
         }
