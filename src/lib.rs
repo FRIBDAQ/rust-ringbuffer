@@ -746,7 +746,7 @@ pub mod ringbuffer {
             }
         }
 
-        struct Consumer {
+        pub struct Consumer {
             map: ThreadSafeRingBuffer,
             index: u32,
             mypid: u32,
@@ -774,6 +774,18 @@ pub mod ringbuffer {
                     None => Err(Error::NoFreeConsumers),
                 }
             }
+            ///
+            ///  for testing need access to the index:
+            ///
+            pub fn get_index(&self) -> u32 {
+                self.index
+            }
+            /// for testing need access to the pid:
+            ///
+            pub fn get_pid(&self) -> u32 {
+                self.mypid
+            }
+
             ///
             /// Get data from the ring - blocking, if necessary,
             /// until the full get can be satisfied.
@@ -1851,5 +1863,46 @@ pub mod ringbuffer {
         use super::consumer;
         use super::producer;
         use super::*;
+        use std::process;
+        #[test]
+        fn attach_1() {
+            // can attach:
+
+            let ring = RingBufferMap::new("poop").unwrap();
+            let safe_ring = ThreadSafeRingBuffer::new(Mutex::new(ring));
+            let n: usize; // Slot number.
+            {
+                let c = consumer::Consumer::attach(&safe_ring);
+                assert!(c.is_ok());
+                if let Ok(consumer) = c {
+                    n = consumer.get_index() as usize;
+                    assert_eq!(process::id(), consumer.get_pid());
+                } else {
+                    n = safe_ring.lock().unwrap().max_consumers();
+                }
+            }
+            // The slot should have dropped and hence been released:
+
+            assert_eq!(
+                UNUSED_ENTRY,
+                safe_ring.lock().unwrap().consumer(n).unwrap().pid
+            );
+        }
+        #[test]
+        fn attach_2() {
+            // No free consumers:
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            for i in 0..ring.max_consumers() {
+                ring.consumer(i).unwrap().pid = 0; // In use.
+            }
+
+            let safe_ring = ThreadSafeRingBuffer::new(Mutex::new(ring));
+            if let Err(e) = consumer::Consumer::attach(&safe_ring) {
+                assert_eq!(consumer::Error::NoFreeConsumers, e);
+            } else {
+                assert!(false, "Should have failed!!");
+            }
+        }
     }
 }
