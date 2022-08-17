@@ -72,7 +72,7 @@ pub mod ringbuffer {
     /// and the free space the producer has to put data before
     /// running into that consumers get offset.
     ///
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq)]
     pub struct ConsumerUsage {
         pub pid: u32,
         pub free: usize,
