@@ -1345,6 +1345,38 @@ pub mod ringbuffer {
                 ring.consumer(i).unwrap().pid = UNUSED_ENTRY;
             }
         }
+        #[test]
+        fn avail_1() {
+            let ring = RingBufferMap::new("poop").unwrap();
+
+            let poffset = ring.data_offset();
+            let c = ClientInformation {
+                offset: ring.data_offset(),
+                pid: 0,
+            };
+            assert_eq!(0, ring.available_bytes(&c, poffset));
+        }
+        #[test]
+        fn avail_2() {
+            let ring = RingBufferMap::new("poop").unwrap();
+            let poffset = ring.data_offset() + 1;
+            let c = ClientInformation {
+                offset: ring.data_offset(),
+                pid: 0,
+            };
+
+            assert_eq!(1, ring.available_bytes(&c, poffset));
+        }
+        #[test]
+        fn avail_3() {
+            let ring = RingBufferMap::new("poop").unwrap();
+            let poffset = ring.data_offset();
+            let c = ClientInformation {
+                offset: ring.data_offset() + 1,
+                pid: 0,
+            };
+            assert_eq!(ring.data_bytes() - 1, ring.available_bytes(&c, poffset));
+        }
     }
     #[cfg(test)]
     mod producer_test {
