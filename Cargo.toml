@@ -1,5 +1,5 @@
 [package]
-name = "ringbuffer"
+name = "NSCLDAQringbuffer"
 version = "0.3.0"
 edition = "2018"
 license = "LGPL-3.0"
