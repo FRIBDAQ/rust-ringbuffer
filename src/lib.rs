@@ -474,12 +474,11 @@ pub mod ringbuffer {
         fn consumable_bytes(&mut self, cidx: u32) -> Result<usize, String> {
             let poffset = self.producer().offset;
             let c;
-            let coffset;
 
             c = self.consumer(cidx as usize);
             if let Ok(consumer) = c {
-                coffset = consumer.offset;
-                Ok(self.distance(coffset, poffset))
+                let consumer = consumer.clone();
+                Ok(self.available_bytes(&consumer, poffset))
             } else {
                 Err(String::from("Invalid consumer"))
             }
