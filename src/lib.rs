@@ -22,7 +22,7 @@ pub mod ringbuffer {
     use std::sync::Mutex;
 
     static MAGIC_STRING: &str = "NSCLRing";
-    static UNUSED_ENTRY: u32 = 0xffffffff;
+    pub static UNUSED_ENTRY: u32 = 0xffffffff;
 
     pub type ThreadSafeRingBuffer = Arc<Mutex<RingBufferMap>>;
     ///
