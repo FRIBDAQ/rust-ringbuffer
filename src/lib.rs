@@ -48,6 +48,11 @@ pub mod ringbuffer {
         offset: usize, // Put/Get offset.
         pid: u32,      // Process ID owning or UNUSED_ENTRY if free.
     }
+    impl ClientInformation {
+        pub fn get_pid(&self) -> u32 {
+            self.pid
+        }
+    }
 
     /// The actual ring buffer is quite a bit simpler in practice:
     ///
@@ -1705,6 +1710,14 @@ pub mod ringbuffer {
             ring.free_producer(pid).unwrap();
             ring.free_consumer(0, pid).unwrap();
         }
+        #[test]
+        fn getpid_1() {
+            // Test get_pid of Client information-- yes it's trivial but ...
+
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            let p = ring.producer();
+            assert_eq!(p.pid, p.get_pid());
+        }
     }
     #[cfg(test)]
     mod producer_test {
@@ -1957,7 +1970,7 @@ pub mod ringbuffer {
             // Fail because we ask too much.  This does not depend on
             // data:
 
-            let mut ring = RingBufferMap::new("poop").unwrap();
+            let ring = RingBufferMap::new("poop").unwrap();
             let mut data: Vec<u8> = vec![];
             data.resize(ring.data_bytes() + 1, 0xff);
 
@@ -1975,7 +1988,7 @@ pub mod ringbuffer {
         fn consume_2() {
             // blocking consume for data that's available.
 
-            let mut ring = RingBufferMap::new("poop").unwrap();
+            let ring = RingBufferMap::new("poop").unwrap();
             let safe_ring = ThreadSafeRingBuffer::new(Mutex::new(ring));
             let mut producer = producer::Producer::attach(&safe_ring).unwrap();
             let mut consumer = consumer::Consumer::attach(&safe_ring).unwrap();
