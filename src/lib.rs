@@ -559,7 +559,6 @@ pub mod ringbuffer {
             }
             let coffset = c.offset;
             let consumable = self.distance(coffset, poffset);
-            println!("Requested {} Available {}", data.len(), consumable);
             if consumable == 0 {
                 return Ok(0);
             }
