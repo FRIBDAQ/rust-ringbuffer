@@ -13,6 +13,8 @@ pub mod ringbuffer {
     use memmap::MmapMut;
     use std::cmp;
     use std::fs::OpenOptions;
+
+    use std::io::Write;
     use std::mem;
     use std::process;
     use std::ptr;
@@ -593,7 +595,6 @@ pub mod ringbuffer {
     pub mod producer {
         use super::*;
         use std::process;
-
         use std::thread;
         use std::time::Duration;
 
@@ -715,6 +716,30 @@ pub mod ringbuffer {
                     .free_producer(process::id())
                     .unwrap();
             }
+        }
+    }
+    /// This allows Producer objects to be written to like stream files:
+
+    impl Write for producer::Producer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.capacity() < buf.len() {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::OutOfMemory,
+                    "Block too big to write",
+                ))
+            } else {
+                if let Ok(s) = self.blocking_put(&buf) {
+                    Ok(s)
+                } else {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "Blocking put to ring buffer failed",
+                    ))
+                }
+            }
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
         }
     }
     ///
@@ -1377,6 +1402,7 @@ pub mod ringbuffer {
             ring.free_producer(process::id()).unwrap();
             ring.producer().offset = ring.data_offset();
         }
+
         #[test]
         fn first_free1() {
             // All free.
@@ -1722,6 +1748,7 @@ pub mod ringbuffer {
     mod producer_test {
         use super::producer;
         use super::*;
+        use std::io::Write;
         use std::sync::Mutex;
         use std::time::Duration;
         #[test]
@@ -1812,6 +1839,19 @@ pub mod ringbuffer {
                 .unwrap()
                 .free_producer(process::id())
                 .unwrap();
+        }
+        #[test]
+        fn produce_write_ok() {
+            let mut ring = RingBufferMap::new("poop").unwrap();
+            ring.producer().pid = UNUSED_ENTRY;
+            ring.producer().offset = ring.data_offset();
+
+            let safe_ring = ThreadSafeRingBuffer::new(Mutex::new(ring));
+
+            let mut producer = producer::Producer::attach(&safe_ring).unwrap();
+            let data: Vec<u8> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+            assert!(producer.write(&data).is_ok());
         }
         #[test]
         fn tmo_put_fail1() {
