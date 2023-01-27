@@ -14,7 +14,7 @@ pub mod ringbuffer {
     use std::cmp;
     use std::fs::OpenOptions;
 
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::mem;
     use std::process;
     use std::ptr;
@@ -881,11 +881,11 @@ pub mod ringbuffer {
                         .consumable_bytes(self.index)
                         .unwrap();
                     if data_available > 0 {
-		       // More data was coming in asynchronously so no larger than the actual len:
+                        // More data was coming in asynchronously so no larger than the actual len:
 
-		        if data_available > data.len() {
-		       	  data_available = data.len();
-			}
+                        if data_available > data.len() {
+                            data_available = data.len();
+                        }
                         return self.blocking_get(&mut data[0..data_available]);
                     } else {
                         return Err(Error::Timeout);
@@ -902,6 +902,21 @@ pub mod ringbuffer {
                     .unwrap();
             }
         }
+    }
+    impl Read for consumer::Consumer {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            
+            if let Ok(s) = self.blocking_get(buf) {
+                Ok(s)
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Blocking read from ringbuffer failed",
+                ))
+            }
+        
+        }
+
     }
 
     // Note the tests below must be run:
@@ -1963,6 +1978,7 @@ pub mod ringbuffer {
         use super::consumer;
         use super::producer;
         use super::*;
+        use std::io::{Write, Read};
         use std::process;
         use std::time::Duration;
         #[test]
@@ -2049,6 +2065,22 @@ pub mod ringbuffer {
                 }
             } else {
                 assert!(false, " Should have worked");
+            }
+        }
+        #[test]
+        fn read_write_ok() {
+            let ring = RingBufferMap::new("poop").unwrap();
+            let safe_ring = ThreadSafeRingBuffer::new(Mutex::new(ring));
+            let mut producer = producer::Producer::attach(&safe_ring).unwrap();
+            let mut consumer = consumer::Consumer::attach(&safe_ring).unwrap();
+
+            let produced: [u8; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+            assert!(producer.write(&produced).is_ok());
+            let mut consumed : [u8; 10] = [0xff; 10];
+            assert!(consumer.read(&mut consumed).is_ok());
+
+            for i in 0..produced.len() {
+                    assert_eq!(produced[i], consumed[i]);
             }
         }
         // consume tests that gave timed waits.:
