@@ -874,13 +874,18 @@ pub mod ringbuffer {
                     }
                     // Wait timed out and not all the data:
 
-                    let data_available = self
+                    let mut data_available = self
                         .map
                         .lock()
                         .unwrap()
                         .consumable_bytes(self.index)
                         .unwrap();
                     if data_available > 0 {
+		       // More data was coming in asynchronously so no larger than the actual len:
+
+		        if data_available > data.len() {
+		       	  data_available = data.len();
+			}
                         return self.blocking_get(&mut data[0..data_available]);
                     } else {
                         return Err(Error::Timeout);
