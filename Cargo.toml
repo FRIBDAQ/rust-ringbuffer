@@ -1,6 +1,6 @@
 [package]
 name = "nscldaq_ringbuffer"
-version = "0.6.4"
+version = "0.7.0"
 #authors = "Ron Fox"
 edition = "2018"
 license = "LGPL-3.0"
