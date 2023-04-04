@@ -905,7 +905,6 @@ pub mod ringbuffer {
     }
     impl Read for consumer::Consumer {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            
             if let Ok(s) = self.blocking_get(buf) {
                 Ok(s)
             } else {
@@ -914,9 +913,7 @@ pub mod ringbuffer {
                     "Blocking read from ringbuffer failed",
                 ))
             }
-        
         }
-
     }
 
     // Note the tests below must be run:
@@ -1978,7 +1975,7 @@ pub mod ringbuffer {
         use super::consumer;
         use super::producer;
         use super::*;
-        use std::io::{Write, Read};
+        use std::io::{Read, Write};
         use std::process;
         use std::time::Duration;
         #[test]
@@ -2076,11 +2073,11 @@ pub mod ringbuffer {
 
             let produced: [u8; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
             assert!(producer.write(&produced).is_ok());
-            let mut consumed : [u8; 10] = [0xff; 10];
+            let mut consumed: [u8; 10] = [0xff; 10];
             assert!(consumer.read(&mut consumed).is_ok());
 
             for i in 0..produced.len() {
-                    assert_eq!(produced[i], consumed[i]);
+                assert_eq!(produced[i], consumed[i]);
             }
         }
         // consume tests that gave timed waits.:
