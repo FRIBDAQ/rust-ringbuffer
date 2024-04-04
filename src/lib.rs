@@ -136,13 +136,18 @@ pub mod ringbuffer {
 
             let p = map.as_ptr() as *const RingBuffer;
             let r = unsafe { &*p };
-            let magic_value = String::from(str::from_utf8(&r.header.magic_string).unwrap());
-            let magic_value = magic_value.trim();
-            let magic_value = magic_value.trim_matches('\0');
-            let magic_expected = String::from(MAGIC_STRING);
-            let magic_expected = magic_expected.trim();
+            let magic = str::from_utf8(&r.header.magic_string);
+            if let Ok(magic_value) = magic {
+                let magic_value = String::from(magic_value);
+                let magic_value = magic_value.trim();
+                let magic_value = magic_value.trim_matches('\0');
+                let magic_expected = String::from(MAGIC_STRING);
+                let magic_expected = magic_expected.trim();
 
-            magic_value == magic_expected
+                magic_value == magic_expected
+            } else {
+                return false;
+            }
         }
         ///
         /// Determine the modulo distance between two offsets.
@@ -927,10 +932,42 @@ pub mod ringbuffer {
     mod map_tests {
         use super::*;
         use std::process;
+        use std::fs::File;
+        use std::fs;
+        use std::mem;
         #[test]
-        fn map_fail() {
+        fn map_fail1() {
             let result = RingBufferMap::new("Cargo.toml");
             assert!(result.is_err());
+        }
+        // ISsue #1 - RingBufferMap:: should return false if the header does not contain UTF-8
+        // was crashing.
+        #[test]
+        fn map_fail2() {
+
+            let bad_ringname = "./a_bad_ring";
+
+            // Create a file where the header is just a bunch of binary invalid utf8.
+            // Do this in a block to get the file closed nicely:
+            {
+                let mut bad_ring = File::create(bad_ringname);
+                assert!(bad_ring.is_ok());
+                let mut bad_ring = bad_ring.unwrap();
+                let data : [u8;2] = [1,255];
+
+                for i in 0..mem::size_of::<RingHeader>() + 100 {
+                    bad_ring.write_all(&data).unwrap();
+                }
+            }                                    // File closes.
+            let test_value = RingBufferMap::new(bad_ringname);
+            assert!(test_value.is_err());               // should be false.
+
+            // Clean up the test file 
+
+            assert!(fs::remove_file(bad_ringname).is_ok());
+
+
+
         }
         #[test]
         fn map_ok() {
