@@ -136,13 +136,18 @@ pub mod ringbuffer {
 
             let p = map.as_ptr() as *const RingBuffer;
             let r = unsafe { &*p };
-            let magic_value = String::from(str::from_utf8(&r.header.magic_string).unwrap());
-            let magic_value = magic_value.trim();
-            let magic_value = magic_value.trim_matches('\0');
-            let magic_expected = String::from(MAGIC_STRING);
-            let magic_expected = magic_expected.trim();
+            let magic = str::from_utf8(&r.header.magic_string);
+            if let Ok(magic_value) = magic {
+                let magic_value = String::from(magic_value);
+                let magic_value = magic_value.trim();
+                let magic_value = magic_value.trim_matches('\0');
+                let magic_expected = String::from(MAGIC_STRING);
+                let magic_expected = magic_expected.trim();
 
-            magic_value == magic_expected
+                magic_value == magic_expected
+            } else {
+                return false;
+            }
         }
         ///
         /// Determine the modulo distance between two offsets.
