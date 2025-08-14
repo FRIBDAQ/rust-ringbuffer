@@ -22,6 +22,8 @@ pub mod ringbuffer {
     use std::string::ToString;
     use std::sync::Arc;
     use std::sync::Mutex;
+    use std::fs::File;
+    
 
     static MAGIC_STRING: &str = "NSCLRing";
     pub static UNUSED_ENTRY: u32 = 0xffffffff;
@@ -165,8 +167,80 @@ pub mod ringbuffer {
                 (off2 - self.data_offset()) + (self.top_offset() - off1) + 1
             }
         }
+         
+        /// Compute the size of a ring file with 100 consumers and the indicated
+        /// data size:
         // Take a file which ought to be a ring buffer and map it:
+        fn compute_file_size(data_size : u32) -> u64 {
+            let size = mem::size_of::<RingHeader>() 
+                + mem::size_of::<ClientInformation>()
+                + 100*mem::size_of::<ClientInformation>()
+                + (data_size as usize);
+            size as u64
+        }
+        /// Create a fing buffer file 
+        ///
+        fn create_ringfile(path : &str, file_size: u64) -> Result<(), String> {
+            if let Ok(file) = File::create(path) {
+                if let Err(_) = file.set_len(file_size) {
+                    return Err(String::from("Failed to set ring file size"))
+                } else {
+                    return Ok(());
+                }
+            } else {
+                return Err(String::from("Failed to create ring file"));
+            }
+        }
+        /// Format an existing ring buffer file:
+        ///
+        fn format_ring(ring_file : &str, data_size : u32) -> Result<(), String> {
+            let map = RingBufferMap::map_unchecked(ring_file)?;
+            let p= map.as_ptr() as *mut RingHeader;   
+            let  header = unsafe {&mut *p};      // Ring header.
+            
+            header.magic_string.copy_from_slice(MAGIC_STRING.as_bytes());
+            header.max_consumer = 100;                    // Hard coded consumer max.
+            header.data_bytes = data_size as usize;
+            header.producer_offset = mem::size_of::<RingHeader>();
+            header.consumer_offset = header.producer_offset + mem::size_of::<ClientInformation>();
+            header.data_offset     = header.consumer_offset + 100*mem::size_of::<ClientInformation>();
+            header.top_offset      = map.len();              // End of shared region.
 
+            // Initialize the producer header:
+            let pproducer =  unsafe {p.add(1) as *mut ClientInformation};
+            let producer  = unsafe {&mut *pproducer};
+
+            producer.pid = UNUSED_ENTRY;
+            producer.offset = 0;
+
+            // Initialize the consumer headers:
+
+            let mut pconsumer = unsafe {pproducer.add(1)};
+            for _i in 0..100 {
+                let  consumer = unsafe { &mut *pconsumer};
+                consumer.pid = UNUSED_ENTRY;
+                consumer.offset = 0;
+                pconsumer = unsafe { pconsumer.add(1)};
+            }
+
+            Ok(())
+        }
+        fn map_unchecked(ring_file: &str) -> Result<MmapMut, String> {
+            match OpenOptions::new()
+                .write(true)
+                .read(true)
+                .create(false)
+                .open(ring_file)
+            {
+                Ok(fp) => {
+                    match unsafe {MmapMut::map_mut(&fp)} {
+                        Ok(map) => Ok(map),
+                        Err(e) => Err(e.to_string())
+                    }
+                },
+                Err(e) => Err(e.to_string())
+            }
+        }
         ///
         ///  Map to an existing ring buffer (the rust interface does not
         /// have a create method to create a new ring buffer file...yet).
@@ -176,35 +250,40 @@ pub mod ringbuffer {
         /// done.
         ///
         pub fn new(ring_file: &str) -> Result<RingBufferMap, String> {
-            match OpenOptions::new()
-                .write(true)
-                .read(true)
-                .create(false)
-                .open(ring_file)
-            {
-                Ok(fp) => {
-                    match unsafe { MmapMut::map_mut(&fp) } {
-                        Ok(map) => {
-                            // Ensure this could be a ring buffer:
-
-                            if map.len() < mem::size_of::<RingBuffer>() {
-                                return Err(format!("{} is not a valid ring buffer", ring_file));
-                            } else {
-                                if Self::check_magic(&map) {
-                                    Ok(RingBufferMap { map: map })
-                                } else {
-                                    Err(format!(
-                                    "{} does not have the correct magic string for a ringbuffer",
-                                    ring_file
-                                ))
-                                }
-                            }
-                        }
-                        Err(e) => Err(e.to_string()),
-                    }
+            let  map = RingBufferMap::map_unchecked(ring_file)?;
+            if map.len() < mem::size_of::<RingBuffer>() {
+                return Err(format!("{} is not a valid ring buffer", ring_file));
+            } else {
+                if Self::check_magic(&map) {
+                    Ok(RingBufferMap { map: map })
+                } else {
+                    Err(format!(
+                    "{} does not have the correct magic string for a ringbuffer",
+                    ring_file
+                ))
                 }
-                Err(e) => Err(e.to_string()),
             }
+        }
+
+        ///
+        /// create - creates a ring buffer with the specified size and the
+        /// normal number of consumers (100).
+        /// If Ok, the file was made and the ring can be registered
+        /// with the ring master.
+        ///  ON Err, the string is a an error message that is human
+        /// readable.
+        /// 
+        /// * ring_file is the full path to the ring buffer file.
+        /// * data_size is the size of the data part of the ring buffer.
+        /// 
+        pub fn create(ring_file : &str, data_size: u32) -> Result<(), String> {
+            // Compute the size of the file:
+
+            let file_size = RingBufferMap::compute_file_size(data_size);
+            RingBufferMap::create_ringfile(ring_file, file_size)?;
+            RingBufferMap::format_ring(ring_file, data_size)?;
+
+            Ok(())
         }
         // getters
 
@@ -280,7 +359,7 @@ pub mod ringbuffer {
         /// data to same ring buffer.
         ///
         pub fn set_producer(&mut self, pid: u32) -> Result<u32, String> {
-            let mut producer = self.producer();
+            let producer = self.producer();
             if (producer.pid == UNUSED_ENTRY) || (producer.pid == pid) {
                 producer.pid = pid;
                 Ok(pid)
@@ -300,7 +379,7 @@ pub mod ringbuffer {
         /// done.  
         ///
         pub fn free_producer(&mut self, pid: u32) -> Result<u32, String> {
-            let mut producer = self.producer();
+            let  producer = self.producer();
 
             // We can only free entries which are already free or
             // that the pid owns:
