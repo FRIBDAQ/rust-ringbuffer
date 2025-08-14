@@ -1029,12 +1029,12 @@ pub mod ringbuffer {
             // Create a file where the header is just a bunch of binary invalid utf8.
             // Do this in a block to get the file closed nicely:
             {
-                let mut bad_ring = File::create(bad_ringname);
+                let bad_ring = File::create(bad_ringname);
                 assert!(bad_ring.is_ok());
                 let mut bad_ring = bad_ring.unwrap();
                 let data : [u8;2] = [1,255];
 
-                for i in 0..mem::size_of::<RingHeader>() + 100 {
+                for _i in 0..mem::size_of::<RingHeader>() + 100 {
                     bad_ring.write_all(&data).unwrap();
                 }
             }                                    // File closes.
