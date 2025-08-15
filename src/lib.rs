@@ -1163,6 +1163,16 @@ pub mod ringbuffer {
             assert!(result.is_err());
         }
         #[test]
+        fn delete_5() {
+            // If the file isn't a ring it should not be deletable.
+            let tempfile = tempfile::NamedTempFile::new()
+                .expect("Failed to make tempfile");
+            tempfile.as_file().set_len(8*1024)
+                .expect("Could not set file size");     // just make it mapable.
+            let map_result = RingBufferMap::new(tempfile.path().to_str().unwrap());
+            assert!(map_result.is_err());
+        }
+        #[test]
         fn map_fail1() {
             let result = RingBufferMap::new("Cargo.toml");
             assert!(result.is_err());
