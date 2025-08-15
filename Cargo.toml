@@ -1,6 +1,6 @@
 [package]
 name = "nscldaq_ringbuffer"
-version = "0.7.6"
+version = "0.8.6"
 #authors = "Ron Fox"
 edition = "2018"
 license = "LGPL-3.0"
@@ -11,4 +11,5 @@ repository="https://github.com/FRIBDAQ/rust-ringbuffer.git"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-memmap = "0.6.2"
+memmap = "0.7.0"
+tempfile = "3.20.0"

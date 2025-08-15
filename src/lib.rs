@@ -11,7 +11,7 @@ pub mod ringbuffer {
 
     // *** IMPORTANT - see note prior to tests about how tests must be run.
     use memmap::MmapMut;
-    use std::cmp;
+    use std::{cmp, fs};
     use std::fs::OpenOptions;
 
     use std::io::{Read, Write};
@@ -22,6 +22,8 @@ pub mod ringbuffer {
     use std::string::ToString;
     use std::sync::Arc;
     use std::sync::Mutex;
+    use std::fs::File;
+    
 
     static MAGIC_STRING: &str = "NSCLRing";
     pub static UNUSED_ENTRY: u32 = 0xffffffff;
@@ -165,8 +167,88 @@ pub mod ringbuffer {
                 (off2 - self.data_offset()) + (self.top_offset() - off1) + 1
             }
         }
+         
+        /// Compute the size of a ring file with 100 consumers and the indicated
+        /// data size:
         // Take a file which ought to be a ring buffer and map it:
+        fn compute_file_size(data_size : u32) -> u64 {
+            let size = mem::size_of::<RingHeader>() 
+                + mem::size_of::<ClientInformation>()
+                + 100*mem::size_of::<ClientInformation>()
+                + (data_size as usize);
+            size as u64
+        }
+        /// Create a fing buffer file 
+        ///
+        fn create_ringfile(path : &str, file_size: u64) -> Result<(), String> {
+            if let Ok(file) = File::create(path) {
+                if let Err(_) = file.set_len(file_size) {
+                    return Err(String::from("Failed to set ring file size"))
+                } else {
+                    return Ok(());
+                }
+            } else {
+                return Err(String::from("Failed to create ring file"));
+            }
+        }
+        /// 
+        /// Format an existing ring buffer file:
+        ///
+        fn format_ring(ring_file : &str, data_size : u32) -> Result<(), String> {
+            let map = RingBufferMap::map_unchecked(ring_file)?;
+            let p= map.as_ptr() as *mut RingHeader;   
+            let  header = unsafe {&mut *p};      // Ring header.
 
+            // pad the string with nulls.
+            
+            header.magic_string.fill(0);
+            
+            for i in 0..MAGIC_STRING.len() {
+                header.magic_string[i] = MAGIC_STRING.as_bytes()[i];
+            }
+
+            header.max_consumer = 100;                    // Hard coded consumer max.
+            header.data_bytes = data_size as usize;
+            header.producer_offset = mem::size_of::<RingHeader>();
+            header.consumer_offset = header.producer_offset + mem::size_of::<ClientInformation>();
+            header.data_offset     = header.consumer_offset + 100*mem::size_of::<ClientInformation>();
+            header.top_offset      = map.len();              // End of shared region.
+
+            // Initialize the producer header:
+            let pproducer =  unsafe {p.add(1) as *mut ClientInformation};
+            let producer  = unsafe {&mut *pproducer};
+
+            producer.pid = UNUSED_ENTRY;
+            producer.offset = header.data_offset;     // Init to the data section.
+
+            // Initialize the consumer headers:
+
+            let mut pconsumer = unsafe {pproducer.add(1)};
+            for _i in 0..100 {
+                let  consumer = unsafe { &mut *pconsumer};
+                consumer.pid = UNUSED_ENTRY;
+                consumer.offset = 0;                   // Will get set when a consumer attaches.
+                pconsumer = unsafe { pconsumer.add(1)};
+            }
+
+            Ok(())
+        }
+        fn map_unchecked(ring_file: &str) -> Result<MmapMut, String> {
+            match OpenOptions::new()
+                .write(true)
+                .read(true)
+                .create(false)
+                .open(ring_file)
+            {
+                Ok(fp) => {
+                    match unsafe {MmapMut::map_mut(&fp)} {
+                        Ok(map) => Ok(map),
+                        Err(e) => Err(e.to_string())
+                    }
+                },
+                Err(e) => Err(e.to_string())
+            }
+        }
         ///
         ///  Map to an existing ring buffer (the rust interface does not
         /// have a create method to create a new ring buffer file...yet).
@@ -176,35 +258,83 @@ pub mod ringbuffer {
         /// done.
         ///
         pub fn new(ring_file: &str) -> Result<RingBufferMap, String> {
-            match OpenOptions::new()
-                .write(true)
-                .read(true)
-                .create(false)
-                .open(ring_file)
-            {
-                Ok(fp) => {
-                    match unsafe { MmapMut::map_mut(&fp) } {
-                        Ok(map) => {
-                            // Ensure this could be a ring buffer:
+            let  map = RingBufferMap::map_unchecked(ring_file)?;
+            if map.len() < mem::size_of::<RingBuffer>() {
+                return Err(format!("{} is not a valid ring buffer", ring_file));
+            } else {
+                if Self::check_magic(&map) {
+                    Ok(RingBufferMap { map: map })
+                } else {
+                    Err(format!(
+                    "{} does not have the correct magic string for a ringbuffer",
+                    ring_file
+                ))
+                }
+            }
+        }
 
-                            if map.len() < mem::size_of::<RingBuffer>() {
-                                return Err(format!("{} is not a valid ring buffer", ring_file));
-                            } else {
-                                if Self::check_magic(&map) {
-                                    Ok(RingBufferMap { map: map })
-                                } else {
-                                    Err(format!(
-                                    "{} does not have the correct magic string for a ringbuffer",
-                                    ring_file
-                                ))
-                                }
-                            }
-                        }
-                        Err(e) => Err(e.to_string()),
+        ///
+        /// create - creates a ring buffer with the specified size and the
+        /// normal number of consumers (100).
+        /// If Ok, the file was made and the ring can be registered
+        /// with the ring master.
+        ///  ON Err, the string is a an error message that is human
+        /// readable.
+        /// 
+        /// * ring_file is the full path to the ring buffer file.
+        /// * data_size is the size of the data part of the ring buffer.
+        /// 
+        pub fn create(ring_file : &str, data_size: u32) -> Result<(), String> {
+            // Compute the size of the file:
+
+            let file_size = RingBufferMap::compute_file_size(data_size);
+            RingBufferMap::create_ringfile(ring_file, file_size)?;
+            RingBufferMap::format_ring(ring_file, data_size)?;
+
+            Ok(())
+        }
+        /// delete
+        ///   Prerequisites:
+        /// *  The ring must exist and be a ring.
+        /// *  There must be no producer.
+        /// *  There must be no consumers.
+        /// Err results have as a payload a human readable text string.
+        pub fn delete(ring_file : &str) -> Result<(), String> {
+            // We put these checks in a block so the map gets dropped before
+            // we actually delete the file:
+            {
+                let  map=  RingBufferMap::new(ring_file);  // Check existence and magic:
+                if let Err(s) = map {
+                    return Err(s);
+                }
+                let mut map = map.unwrap();
+                // Ensure there's noproducer and no consumers:
+
+                let usage = map.get_usage();
+                if usage.producer_pid != UNUSED_ENTRY {
+                    return Err(String::from("The ringbuffer still has a consumer attached to it"));
+                }
+                // if there are consumers: 
+
+                let mut cons_count = 0;
+                for consumer in usage.consumer_usage {
+                    if consumer.pid != UNUSED_ENTRY {
+                        cons_count = cons_count + 1;
                     }
                 }
-                Err(e) => Err(e.to_string()),
+                if cons_count > 0 {
+                    return Err(format!(
+                        "There are still {} consumers attached to the ringbuffer", cons_count)
+                    );
+                }
             }
+            let status = fs::remove_file(ring_file);
+            if let Err(reason) = status {
+                return Err(
+                    format!("Unable to delete the ring buffer file {}: {}", ring_file, reason)
+                );
+            }
+            Ok(())
         }
         // getters
 
@@ -280,7 +410,7 @@ pub mod ringbuffer {
         /// data to same ring buffer.
         ///
         pub fn set_producer(&mut self, pid: u32) -> Result<u32, String> {
-            let mut producer = self.producer();
+            let producer = self.producer();
             if (producer.pid == UNUSED_ENTRY) || (producer.pid == pid) {
                 producer.pid = pid;
                 Ok(pid)
@@ -300,7 +430,7 @@ pub mod ringbuffer {
         /// done.  
         ///
         pub fn free_producer(&mut self, pid: u32) -> Result<u32, String> {
-            let mut producer = self.producer();
+            let  producer = self.producer();
 
             // We can only free entries which are already free or
             // that the pid owns:
@@ -935,6 +1065,113 @@ pub mod ringbuffer {
         use std::fs::File;
         use std::fs;
         use std::mem;
+        use tempfile;
+        #[test]
+        fn create_1() {
+            // Create a ring buffer map file but with a bad path:
+
+            let result = RingBufferMap::create("/no/such/path.mem", 1000);
+            assert!(result.is_err());
+        }
+        #[test]
+        fn create_2() {
+            // Should be able to create a ringbuffer and map to it in test dir:
+
+            let tempfile = tempfile::NamedTempFile::new().expect("Failed to make named temp file");
+            let path = String::from(tempfile.path().to_str().unwrap());
+            let result = RingBufferMap::create(&path, 1024*1024);
+            assert!(result.is_ok());
+            
+            // Should be able to map:
+
+            let mapresult = RingBufferMap::new(&path);
+            assert!(mapresult.is_ok());
+            let mut map = mapresult.unwrap();
+
+            assert_eq!(100, map.max_consumers());   // hard coded.
+            assert_eq!(1024*1024, map.data_bytes()); // The data size we asked for.
+            let usage = map.get_usage();
+            assert_eq!(UNUSED_ENTRY, usage.producer_pid);
+            assert_eq!(1024*1024, usage.free_space);
+            assert_eq!(0, usage.max_queued);
+
+            for consumer in usage.consumer_usage {
+                assert_eq!(UNUSED_ENTRY, consumer.pid);
+            }
+            tempfile.close().expect("should be able to close the file");
+            
+        }
+        #[test]
+        fn delete_1() {
+            // Can't delete a nonexistent ringbuffer:
+
+            let result = RingBufferMap::delete("/no/such/ring");
+            assert!(result.is_err());
+
+        }
+        #[test]
+        fn delete_2() {
+            // Can delete a ring that was just create... there are no clients:
+
+            let tempfile = tempfile::NamedTempFile::new().expect("Failed to make named temp file");
+            let path = String::from(tempfile.path().to_str().unwrap());
+            RingBufferMap::create(&path, 1024*1024)
+                .expect("could not create the ring_buffer (delete_2)");
+
+            let result = RingBufferMap::delete(&path);
+            assert!(result.is_ok());
+
+            // Let's hope tempfile is well behaved when the file is yanked from underneath it.
+        }
+        #[test]
+        fn delete_3() {
+            // Should not delete if there's producer:
+            let tempfile = tempfile::NamedTempFile::new().expect("Failed to make named temp file");
+            let path = String::from(tempfile.path().to_str().unwrap());
+            RingBufferMap::create(&path, 1024*1024)
+                .expect("could not create the ring_buffer (delete_2)");
+
+            let mut map = RingBufferMap::new(&path)
+                .expect("Failed to map the ring I j ust made");
+            let my_pid = process::id();
+            assert!(map.set_producer(my_pid).is_ok());
+
+            let result = RingBufferMap::delete(&path);
+            assert!(result.is_err());
+        }
+        #[test]
+        fn delete_4() {
+            // should not delete if there's a consumer:
+
+            let tempfile = tempfile::NamedTempFile::new().expect("Failed to make named temp file");
+            let path = String::from(tempfile.path().to_str().unwrap());
+            RingBufferMap::create(&path, 1024*1024)
+                .expect("could not create the ring_buffer (delete_2)");
+
+            let mut map = RingBufferMap::new(&path)
+                .expect("Failed to map the ring I j ust made");
+
+            let my_pid = process::id();
+            let slot = map.first_free_consumer()
+                .expect("Failed to get a consumer slot");
+            let result = map.set_consumer(slot as usize, my_pid);
+            assert!(result.is_ok());
+
+            // Delete should faile:
+
+            let result= RingBufferMap::delete(&path);
+            assert!(result.is_err());
+        }
+        #[test]
+        fn delete_5() {
+            // If the file isn't a ring it should not be deletable.
+            let tempfile = tempfile::NamedTempFile::new()
+                .expect("Failed to make tempfile");
+            tempfile.as_file().set_len(8*1024)
+                .expect("Could not set file size");     // just make it mapable.
+            let map_result = RingBufferMap::new(tempfile.path().to_str().unwrap());
+            assert!(map_result.is_err());
+        }
         #[test]
         fn map_fail1() {
             let result = RingBufferMap::new("Cargo.toml");
@@ -950,12 +1187,12 @@ pub mod ringbuffer {
             // Create a file where the header is just a bunch of binary invalid utf8.
             // Do this in a block to get the file closed nicely:
             {
-                let mut bad_ring = File::create(bad_ringname);
+                let bad_ring = File::create(bad_ringname);
                 assert!(bad_ring.is_ok());
                 let mut bad_ring = bad_ring.unwrap();
                 let data : [u8;2] = [1,255];
 
-                for i in 0..mem::size_of::<RingHeader>() + 100 {
+                for _i in 0..mem::size_of::<RingHeader>() + 100 {
                     bad_ring.write_all(&data).unwrap();
                 }
             }                                    // File closes.
@@ -2182,4 +2419,5 @@ pub mod ringbuffer {
             }
         }
     }
+ 
 }
