@@ -197,8 +197,15 @@ pub mod ringbuffer {
             let map = RingBufferMap::map_unchecked(ring_file)?;
             let p= map.as_ptr() as *mut RingHeader;   
             let  header = unsafe {&mut *p};      // Ring header.
+
+            // pad the string with nulls.
             
-            header.magic_string.copy_from_slice(MAGIC_STRING.as_bytes());
+            header.magic_string.fill(0);
+            
+            for i in 0..MAGIC_STRING.len() {
+                header.magic_string[i] = MAGIC_STRING.as_bytes()[i];
+            }
+
             header.max_consumer = 100;                    // Hard coded consumer max.
             header.data_bytes = data_size as usize;
             header.producer_offset = mem::size_of::<RingHeader>();
@@ -211,7 +218,7 @@ pub mod ringbuffer {
             let producer  = unsafe {&mut *pproducer};
 
             producer.pid = UNUSED_ENTRY;
-            producer.offset = 0;
+            producer.offset = header.data_offset;     // Init to the data section.
 
             // Initialize the consumer headers:
 
@@ -219,7 +226,7 @@ pub mod ringbuffer {
             for _i in 0..100 {
                 let  consumer = unsafe { &mut *pconsumer};
                 consumer.pid = UNUSED_ENTRY;
-                consumer.offset = 0;
+                consumer.offset = 0;                   // Will get set when a consumer attaches.
                 pconsumer = unsafe { pconsumer.add(1)};
             }
 
@@ -1014,6 +1021,42 @@ pub mod ringbuffer {
         use std::fs::File;
         use std::fs;
         use std::mem;
+        use tempfile;
+        #[test]
+        fn create_1() {
+            // Create a ring buffer map file but with a bad path:
+
+            let result = RingBufferMap::create("/no/such/path.mem", 1000);
+            assert!(result.is_err());
+        }
+        #[test]
+        fn create_2() {
+            // Should be able to create a ringbuffer and map to it in test dir:
+
+            let tempfile = tempfile::NamedTempFile::new().expect("Failed to make named temp file");
+            let path = String::from(tempfile.path().to_str().unwrap());
+            let result = RingBufferMap::create(&path, 1024*1024);
+            assert!(result.is_ok());
+            
+            // Should be able to map:
+
+            let mapresult = RingBufferMap::new(&path);
+            assert!(mapresult.is_ok());
+            let mut map = mapresult.unwrap();
+
+            assert_eq!(100, map.max_consumers());   // hard coded.
+            assert_eq!(1024*1024, map.data_bytes()); // The data size we asked for.
+            let usage = map.get_usage();
+            assert_eq!(UNUSED_ENTRY, usage.producer_pid);
+            assert_eq!(1024*1024, usage.free_space);
+            assert_eq!(0, usage.max_queued);
+
+            for consumer in usage.consumer_usage {
+                assert_eq!(UNUSED_ENTRY, consumer.pid);
+            }
+            tempfile.close().expect("should be able to close the file");
+            
+        }
         #[test]
         fn map_fail1() {
             let result = RingBufferMap::new("Cargo.toml");
@@ -2261,4 +2304,5 @@ pub mod ringbuffer {
             }
         }
     }
+ 
 }
