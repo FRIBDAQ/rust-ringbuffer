@@ -296,38 +296,11 @@ pub mod ringbuffer {
         /// delete
         ///   Prerequisites:
         /// *  The ring must exist and be a ring.
-        /// *  There must be no producer.
-        /// *  There must be no consumers.
+        /// Presumably at some point someone will interact with the ringmaster and get it to 
+        /// kill off the clients.
         /// Err results have as a payload a human readable text string.
         pub fn delete(ring_file : &str) -> Result<(), String> {
-            // We put these checks in a block so the map gets dropped before
-            // we actually delete the file:
-            {
-                let  map=  RingBufferMap::new(ring_file);  // Check existence and magic:
-                if let Err(s) = map {
-                    return Err(s);
-                }
-                let mut map = map.unwrap();
-                // Ensure there's noproducer and no consumers:
-
-                let usage = map.get_usage();
-                if usage.producer_pid != UNUSED_ENTRY {
-                    return Err(String::from("The ringbuffer still has a consumer attached to it"));
-                }
-                // if there are consumers: 
-
-                let mut cons_count = 0;
-                for consumer in usage.consumer_usage {
-                    if consumer.pid != UNUSED_ENTRY {
-                        cons_count = cons_count + 1;
-                    }
-                }
-                if cons_count > 0 {
-                    return Err(format!(
-                        "There are still {} consumers attached to the ringbuffer", cons_count)
-                    );
-                }
-            }
+            
             let status = fs::remove_file(ring_file);
             if let Err(reason) = status {
                 return Err(
@@ -1123,47 +1096,9 @@ pub mod ringbuffer {
 
             // Let's hope tempfile is well behaved when the file is yanked from underneath it.
         }
+        
         #[test]
         fn delete_3() {
-            // Should not delete if there's producer:
-            let tempfile = tempfile::NamedTempFile::new().expect("Failed to make named temp file");
-            let path = String::from(tempfile.path().to_str().unwrap());
-            RingBufferMap::create(&path, 1024*1024)
-                .expect("could not create the ring_buffer (delete_2)");
-
-            let mut map = RingBufferMap::new(&path)
-                .expect("Failed to map the ring I j ust made");
-            let my_pid = process::id();
-            assert!(map.set_producer(my_pid).is_ok());
-
-            let result = RingBufferMap::delete(&path);
-            assert!(result.is_err());
-        }
-        #[test]
-        fn delete_4() {
-            // should not delete if there's a consumer:
-
-            let tempfile = tempfile::NamedTempFile::new().expect("Failed to make named temp file");
-            let path = String::from(tempfile.path().to_str().unwrap());
-            RingBufferMap::create(&path, 1024*1024)
-                .expect("could not create the ring_buffer (delete_2)");
-
-            let mut map = RingBufferMap::new(&path)
-                .expect("Failed to map the ring I j ust made");
-
-            let my_pid = process::id();
-            let slot = map.first_free_consumer()
-                .expect("Failed to get a consumer slot");
-            let result = map.set_consumer(slot as usize, my_pid);
-            assert!(result.is_ok());
-
-            // Delete should faile:
-
-            let result= RingBufferMap::delete(&path);
-            assert!(result.is_err());
-        }
-        #[test]
-        fn delete_5() {
             // If the file isn't a ring it should not be deletable.
             let tempfile = tempfile::NamedTempFile::new()
                 .expect("Failed to make tempfile");
