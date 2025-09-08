@@ -10,7 +10,7 @@
 pub mod ringbuffer {
 
     // *** IMPORTANT - see note prior to tests about how tests must be run.
-    use memmap::MmapMut;
+    use memmap2::MmapMut;
     use std::{cmp, fs};
     use std::fs::OpenOptions;
 
@@ -72,7 +72,7 @@ pub mod ringbuffer {
     ///  See the implementation for more.
     ///
     pub struct RingBufferMap {
-        map: memmap::MmapMut,
+        map: memmap2::MmapMut,
     }
     ///
     /// for a given consumer (used) this provides
@@ -133,7 +133,7 @@ pub mod ringbuffer {
         /// Check that a mapped file has the correct 'magic' string
         /// at the beginning of it.  Note that we must trim the nulls from the
         /// back end  of the magic string in the file.
-        fn check_magic(map: &memmap::MmapMut) -> bool {
+        fn check_magic(map: &memmap2::MmapMut) -> bool {
             // Make a raw pointer to a ringbuffer and turn it into a ref:
 
             let p = map.as_ptr() as *const RingBuffer;
