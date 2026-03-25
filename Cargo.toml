@@ -11,5 +11,8 @@ repository="https://github.com/FRIBDAQ/rust-ringbuffer.git"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-memmap2 = "0.9.8"
-tempfile = "3.21.0"
+memmap2 = "0.9.10"
+
+# I think tempfile is only used for tests...
+[dev-dependencies]
+tempfile = "3.27.0"
