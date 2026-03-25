@@ -1,6 +1,6 @@
 [package]
 name = "nscldaq_ringbuffer"
-version = "0.8.8"
+version = "0.8.9"
 #authors = "Ron Fox"
 edition = "2018"
 license = "LGPL-3.0"
@@ -11,5 +11,8 @@ repository="https://github.com/FRIBDAQ/rust-ringbuffer.git"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-memmap2 = "0.9.8"
-tempfile = "3.21.0"
+memmap2 = "0.9.10"
+
+# I think tempfile is only used for tests...
+[dev-dependencies]
+tempfile = "3.27.0"
